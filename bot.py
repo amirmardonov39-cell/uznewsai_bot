@@ -459,14 +459,16 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             continue
             
         # 3. Send preview to Admin for review
-        combined_caption = f"🇷🇺 {text_ru}\n\n➖➖➖\n\n🇺🇿 {text_uz}"
+        body = f"🇷🇺 {text_ru}\n\n➖➖➖\n\n🇺🇿 {text_uz}"
+        footer = ""
         if not url.startswith("manual_"):
-            combined_caption += f"\n\n🔗 Источник: {url}"
-        combined_caption += "\n📢 @aileaderuz"
+            footer += f"\n\n🔗 Источник: {url}"
+        footer += "\n📢 @aileaderuz"
         
-        # Absolute safety fallback for Telegram limit
-        if len(combined_caption) > 1024:
-            combined_caption = combined_caption[:1024]
+        # Safe truncation avoiding removing the footer links
+        if len(body) + len(footer) > 1024:
+            body = body[:1024 - len(footer) - 3] + "..."
+        combined_caption = body + footer
             
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -748,15 +750,15 @@ CRITICAL RULES:
         await update.message.reply_text("❌ Ошибка при сохранении.")
         return
         
-    caption_combined = f"{translated['uz']}\n\n➖➖➖\n\n{translated['ru']}"
-    
+    body = f"{translated['uz']}\n\n➖➖➖\n\n{translated['ru']}"
+    footer = ""
     if not link.startswith("manual_"):
-        caption_combined += f"\n\n🔗 Источник: {link}"
-        
-    caption_combined += "\n📢 @aileaderuz"
+        footer += f"\n\n🔗 Источник: {link}"
+    footer += "\n📢 @aileaderuz"
     
-    if len(caption_combined) > 1024:
-        caption_combined = caption_combined[:1024]
+    if len(body) + len(footer) > 1024:
+        body = body[:1024 - len(footer) - 3] + "..."
+    caption_combined = body + footer
         
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -843,15 +845,15 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Handle schema updates where media_type might be None for old articles
             link, text_uz, text_ru, photo_url, media_type = row
             media_type = media_type or "photo"
-            caption_combined = f"{text_uz}\n\n➖➖➖\n\n{text_ru}"
-            
+            body = f"{text_uz}\n\n➖➖➖\n\n{text_ru}"
+            footer = ""
             if not link.startswith("manual_"):
-                caption_combined += f"\n\n🔗 Источник: {link}"
-                
-            caption_combined += "\n📢 @aileaderuz"
-                
-            if len(caption_combined) > 1024:
-                caption_combined = caption_combined[:1024]
+                footer += f"\n\n🔗 Источник: {link}"
+            footer += "\n📢 @aileaderuz"
+            
+            if len(body) + len(footer) > 1024:
+                body = body[:1024 - len(footer) - 3] + "..."
+            caption_combined = body + footer
                 
             img_bytes = None
             if photo_url and photo_url.startswith("http"):
