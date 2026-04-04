@@ -43,12 +43,12 @@ class TranslatedArticle(BaseModel):
     emoji: str = Field(description="One relevant emoji, max 2 chars", default="📰")
     title_ru: str = Field(description="Catchy title in Russian", default="")
     title_uz: str = Field(description="Catchy title in Uzbek", default="")
-    p1_ru: str = Field(description="Paragraph 1 (Headline). Must start exactly with 'Суть: '", default="")
-    p1_uz: str = Field(description="Paragraph 1 (Headline). Must start exactly with 'Суть: '", default="")
-    p2_ru: str = Field(description="Paragraph 2 (Why it matters). Must start exactly with 'Контекст: '", default="")
-    p2_uz: str = Field(description="Paragraph 2 (Why it matters). Must start exactly with 'Контекст: '", default="")
-    p3_ru: str = Field(description="Paragraph 3 (Future impact). Must start exactly with 'Итог: '", default="")
-    p3_uz: str = Field(description="Paragraph 3 (Future impact). Must start exactly with 'Итог: '", default="")
+    p1_ru: str = Field(description="Paragraph 1 (Catchy Headline)", default="")
+    p1_uz: str = Field(description="Paragraph 1 (Catchy Headline)", default="")
+    p2_ru: str = Field(description="Paragraph 2 (Details/Why it matters)", default="")
+    p2_uz: str = Field(description="Paragraph 2 (Details/Why it matters)", default="")
+    p3_ru: str = Field(description="Paragraph 3 (Actionable takeaway/Conclusion)", default="")
+    p3_uz: str = Field(description="Paragraph 3 (Actionable takeaway/Conclusion)", default="")
     image_prompt: str = Field(description="Short English prompt for AI image (max 10 words, keywords only, e.g. 'fintech artificial intelligence bubble')", default="digital technology artificial intelligence")
 
 def init_db():
@@ -134,13 +134,13 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
 
 SYSTEM_PROMPT = """You are a top-tier global tech expert, analyst, and bilingual copywriter (Uzbek & Russian).
 Your goal is to write highly professional, insightful, and intriguing news summaries that captivate the reader.
-1. Write in Official Russian and Native-level Official Uzbek (literary, flawless grammar). The tone must be serious, analytical, and professional. Completely avoid using emojis in the text body!
+1. Write in Official Russian and Native-level Official Uzbek. STRICT LANGUAGE ISOLATION: The Uzbek translation MUST ONLY contain pure Uzbek words. Do NOT include Russian words in the Uzbek translation. The tone must be serious, analytical, and professional. Completely avoid using emojis in the text body!
 2. COMBINED LENGTH LIMIT: Keep each language translation STRICTLY UNDER 400 characters total. Fit both languages together in one Telegram Post (max 1024 chars).
 3. Do NOT include HTML tags.
-4. Intrigue the reader! Make the headlines compelling and the takeaways thought-provoking. Always provide exactly 3 distinct very short paragraphs per language following this strict structure:
-   - p1: Суть: (Core news/Intriguing Headline) 
-   - p2: Контекст: (Why it fundamentally changes the industry)
-   - p3: Итог: (Thought-provoking takeaway or future impact)
+4. Intrigue the reader! Make the headlines compelling and the takeaways thought-provoking. Always provide exactly 3 distinct paragraphs per language. DO NOT use any robotic prefixes like "Суть:", "Контекст:", or "Итог:". Just write 3 flowing paragraphs:
+   - p1: Catchy, intriguing headline/introductory paragraph.
+   - p2: Context and details explaining why this changes the industry.
+   - p3: Thought-provoking takeaway or future impact insight.
 5. Generate an `image_prompt` in ENGLISH (max 6 keywords) representing the exact topic visually (e.g., "nvidia chip glowing", "cybersecurity code screen").
 6. This channel is STRICTLY about Tech, AI, Startups. If the text is completely unrelated to these topics, YOU MUST SET THE EMOJI FIELD EXACTLY TO: 🚫"""
 
@@ -456,9 +456,9 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             continue
             
         # 3. Send preview to Admin for review
-        combined_caption = f"🇷🇺 {text_ru}\n\n🇺🇿 {text_uz}"
+        combined_caption = f"🇷🇺 {text_ru}\n\n➖➖➖\n\n🇺🇿 {text_uz}"
         if not url.startswith("manual_"):
-            combined_caption += f"\n\n🔗 <a href='{url}'>Источник / Manba</a>"
+            combined_caption += f"\n\n🔗 Источник: {url}"
         combined_caption += "\n📢 @aileaderuz"
         
         # Absolute safety fallback for Telegram limit
@@ -615,9 +615,9 @@ CRITICAL RULES:
 3. Keep the 3 paragraphs concise (max 150 chars per field).
 4. Provide translation in Official Russian and Native-level Official Uzbek.
 5. Always provide exactly 3 distinct paragraphs following this strict structure:
-   - p1: Суть: (Core news/Headline)
-   - p2: Контекст: (Why it matters)
-   - p3: Итог: (Actionable takeaway)"""
+   - p1: Catchy, intriguing headline/introductory paragraph.
+   - p2: Context and details explaining why this changes the industry.
+   - p3: Thought-provoking takeaway or future impact insight."""
 
         try:
             response = client.models.generate_content(
