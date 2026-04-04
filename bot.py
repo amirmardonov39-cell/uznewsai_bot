@@ -459,7 +459,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         combined_caption = f"🇷🇺 {text_ru}\n\n🇺🇿 {text_uz}"
         if not url.startswith("manual_"):
             combined_caption += f"\n\n🔗 <a href='{url}'>Источник / Manba</a>"
-        combined_caption += "\n📢 @deeptrusttech"
+        combined_caption += "\n📢 @aileaderuz"
         
         # Absolute safety fallback for Telegram limit
         if len(combined_caption) > 1024:
@@ -651,7 +651,7 @@ CRITICAL RULES:
             
             caption_ru = f"🇷🇺 <b>НОВАЯ НОВОСТЬ ДЛЯ ПУБЛИКАЦИИ:</b>\n\n{new_ru}"
             safe_text = caption_ru[:800] + "..." if len(caption_ru) > 800 else caption_ru
-            caption_ru = f"{safe_text}\n📢 @deeptrusttech"
+            caption_ru = f"{safe_text}\n📢 @aileaderuz"
             
             if len(caption_ru) > 1024:
                 caption_ru = caption_ru[:1024]
@@ -749,7 +749,7 @@ CRITICAL RULES:
     if not link.startswith("manual_"):
         caption_combined += f"\n\n🔗 Источник: {link}"
         
-    caption_combined += "\n📢 @deeptrusttech"
+    caption_combined += "\n📢 @aileaderuz"
     
     if len(caption_combined) > 1024:
         caption_combined = caption_combined[:1024]
@@ -844,7 +844,7 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if not link.startswith("manual_"):
                 caption_combined += f"\n\n🔗 Источник: {link}"
                 
-            caption_combined += "\n📢 @deeptrusttech"
+            caption_combined += "\n📢 @aileaderuz"
                 
             if len(caption_combined) > 1024:
                 caption_combined = caption_combined[:1024]
