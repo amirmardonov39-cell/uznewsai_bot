@@ -43,12 +43,12 @@ class TranslatedArticle(BaseModel):
     emoji: str = Field(description="One relevant emoji, max 2 chars", default="📰")
     title_ru: str = Field(description="Catchy title in Russian", default="")
     title_uz: str = Field(description="Catchy title in Uzbek", default="")
-    p1_ru: str = Field(description="Paragraph 1 (Headline/Core). Must start exactly with '🚀 '", default="")
-    p1_uz: str = Field(description="Paragraph 1 (Headline/Core). Must start exactly with '🚀 '", default="")
-    p2_ru: str = Field(description="Paragraph 2 (Context/Why it matters). Must start exactly with '💡 '", default="")
-    p2_uz: str = Field(description="Paragraph 2 (Context/Why it matters). Must start exactly with '💡 '", default="")
-    p3_ru: str = Field(description="Paragraph 3 (Takeaway/Conclusion). Must start exactly with '📌 '", default="")
-    p3_uz: str = Field(description="Paragraph 3 (Takeaway/Conclusion). Must start exactly with '📌 '", default="")
+    p1_ru: str = Field(description="Paragraph 1 (Headline). Must start exactly with 'Суть: '", default="")
+    p1_uz: str = Field(description="Paragraph 1 (Headline). Must start exactly with 'Суть: '", default="")
+    p2_ru: str = Field(description="Paragraph 2 (Why it matters). Must start exactly with 'Контекст: '", default="")
+    p2_uz: str = Field(description="Paragraph 2 (Why it matters). Must start exactly with 'Контекст: '", default="")
+    p3_ru: str = Field(description="Paragraph 3 (Future impact). Must start exactly with 'Итог: '", default="")
+    p3_uz: str = Field(description="Paragraph 3 (Future impact). Must start exactly with 'Итог: '", default="")
     image_prompt: str = Field(description="Short English prompt for AI image (max 10 words, keywords only, e.g. 'fintech artificial intelligence bubble')", default="digital technology artificial intelligence")
 
 def init_db():
@@ -132,17 +132,17 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """You are a top-tier global tech analyst and bilingual copywriter (Uzbek & Russian) working for deep trust tech.
-1. Provide deep insights, not just translation. Write in Official Russian and Native-level Official Uzbek (literary, flawless grammar).
-2. COMBINED LENGTH LIMIT: Keep each language translation STRICTLY UNDER 400 characters total. It is CRITICAL to fit both languages together in one Telegram Post (max 1024 chars).
-3. Do NOT include HTML tags in your text.
-4. Always provide exactly 3 distinct very short paragraphs per language following this strict structure:
-   - p1: 🚀 Суть (Core news/Headline)
-   - p2: 💡 Контекст (Why it matters globally/locally)
-   - p3: 📌 Итог (Actionable takeaway or future impact)
-5. Generate a short, descriptive `image_prompt` in ENGLISH (max 10 keywords).
-6. This channel is STRICTLY about: Artificial Intelligence, Machine Learning, Technology, Programming, Cybersecurity, Startups, and Tech policy.
-7. If the text is completely unrelated to these topics, YOU MUST SET THE EMOJI FIELD EXACTLY TO: 🚫"""
+SYSTEM_PROMPT = """You are a top-tier global tech expert, analyst, and bilingual copywriter (Uzbek & Russian).
+Your goal is to write highly professional, insightful, and intriguing news summaries that captivate the reader.
+1. Write in Official Russian and Native-level Official Uzbek (literary, flawless grammar). The tone must be serious, analytical, and professional. Completely avoid using emojis in the text body!
+2. COMBINED LENGTH LIMIT: Keep each language translation STRICTLY UNDER 400 characters total. Fit both languages together in one Telegram Post (max 1024 chars).
+3. Do NOT include HTML tags.
+4. Intrigue the reader! Make the headlines compelling and the takeaways thought-provoking. Always provide exactly 3 distinct very short paragraphs per language following this strict structure:
+   - p1: Суть: (Core news/Intriguing Headline) 
+   - p2: Контекст: (Why it fundamentally changes the industry)
+   - p3: Итог: (Thought-provoking takeaway or future impact)
+5. Generate an `image_prompt` in ENGLISH (max 6 keywords) representing the exact topic visually (e.g., "nvidia chip glowing", "cybersecurity code screen").
+6. This channel is STRICTLY about Tech, AI, Startups. If the text is completely unrelated to these topics, YOU MUST SET THE EMOJI FIELD EXACTLY TO: 🚫"""
 
 # Keywords that MUST be present for RSS items (at least one) to pass pre-filter
 TECH_KEYWORDS = [
@@ -276,8 +276,10 @@ SOURCES = {
 DEFAULT_IMAGE = "https://telegra.ph/file/55de2abdf5e6e3d7c56dc.jpg"
 
 def get_thematic_image(prompt: str) -> str:
-    """Fallback if no original image is found."""
-    return DEFAULT_IMAGE
+    """Fallback if no original image is found. Generates an AI image via Pollinations.ai"""
+    safe_prompt = urllib.parse.quote(prompt.strip())
+    # Free, instant AI image generation without API key
+    return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true"
 
 def extract_og_image(url: str) -> str:
     """Scrapes the original source URL for an OpenGraph or Twitter image."""
@@ -397,6 +399,18 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info("Running aggregator job...")
+    
+    # Check daily limit (max 10 per day)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now')")
+    count_today = cursor.fetchone()[0]
+    conn.close()
+    
+    if count_today >= 10:
+        logger.info("Daily limit of 10 articles reached. Skipping fetch.")
+        return
+
     news_items = fetch_latest_news()
     processed_count: int = 0
 
@@ -601,9 +615,9 @@ CRITICAL RULES:
 3. Keep the 3 paragraphs concise (max 150 chars per field).
 4. Provide translation in Official Russian and Native-level Official Uzbek.
 5. Always provide exactly 3 distinct paragraphs following this strict structure:
-   - p1: 🚀 Суть (Core news/Headline)
-   - p2: 💡 Контекст (Why it matters)
-   - p3: 📌 Итог (Actionable takeaway)"""
+   - p1: Суть: (Core news/Headline)
+   - p2: Контекст: (Why it matters)
+   - p3: Итог: (Actionable takeaway)"""
 
         try:
             response = client.models.generate_content(
