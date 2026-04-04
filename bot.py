@@ -179,10 +179,11 @@ async def download_image(url: str, timeout: int = 30) -> bytes:
         logger.error(f"Failed to download image {url}: {e}")
         return b""
 
-def process_and_translate(text_content: str) -> dict:
+async def process_and_translate(text_content: str) -> dict:
     prompt = f"{SYSTEM_PROMPT}\n\nText to process:\n{text_content}"
     try:
-        response = client.models.generate_content(
+        response = await asyncio.to_thread(
+            client.models.generate_content,
             model=MODEL_ID,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -210,9 +211,10 @@ def process_and_translate(text_content: str) -> dict:
     except Exception as e:
         if "429" in str(e):
             logger.warning("Gemini 429 Quota Exceeded. Sleeping 15s before retry...")
-            time.sleep(15)
+            await asyncio.sleep(15)
             try:
-                response = client.models.generate_content(
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
                     model=MODEL_ID,
                     contents=prompt,
                     config=types.GenerateContentConfig(
@@ -281,14 +283,15 @@ def get_thematic_image(prompt: str) -> str:
     # Free, instant AI image generation without API key
     return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true"
 
-def extract_og_image(url: str) -> str:
+async def extract_og_image(url: str) -> str:
     """Scrapes the original source URL for an OpenGraph or Twitter image."""
     if not url or not url.startswith("http"):
         return None
     try:
         # Avoid blocking by using a standard user agent
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        resp = requests.get(url, headers=headers, timeout=5)
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             # Look for og:image
@@ -411,7 +414,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Daily limit of 10 articles reached. Skipping fetch.")
         return
 
-    news_items = fetch_latest_news()
+    news_items = await asyncio.to_thread(fetch_latest_news)
     processed_count: int = 0
 
     for item in news_items:
@@ -432,7 +435,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Processing new item: {url}")
         
         # 1. Translate via Gemini
-        translated = process_and_translate(item['text'])
+        translated = await process_and_translate(item['text'])
         
         if not translated:
             continue
@@ -620,7 +623,8 @@ CRITICAL RULES:
    - p3: Thought-provoking takeaway or future impact insight."""
 
         try:
-            response = client.models.generate_content(
+            response = await asyncio.to_thread(
+                client.models.generate_content,
                 model=MODEL_ID,
                 contents="Revise the text.",
                 config=types.GenerateContentConfig(
@@ -681,7 +685,7 @@ CRITICAL RULES:
     await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
     
     logger.info("Calling process_and_translate...")
-    translated = process_and_translate(str(text))
+    translated = await process_and_translate(str(text))
     logger.info(f"Translation returned. Success: {bool(translated)}")
     if not translated:
         await update.message.reply_text("❌ Ошибка при обращении к API Gemini (возможно, исчерпан лимит). Попробуйте позже.")
@@ -731,7 +735,7 @@ CRITICAL RULES:
     # If NO media in Telegram at all, try scraping the original source link
     if not photo_url and link.startswith("http"):
         logger.info(f"No media found in TG message, attempting to scrape original source: {link}")
-        scraped_img = extract_og_image(link)
+        scraped_img = await extract_og_image(link)
         if scraped_img:
             photo_url = scraped_img
         
