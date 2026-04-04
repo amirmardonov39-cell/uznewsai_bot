@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DB_PATH = os.getenv("DB_PATH", DB_PATH)
+DB_PATH = os.getenv("DB_PATH", "bot_database.sqlite")
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     logger.error("Missing TELEGRAM_TOKEN or GEMINI_API_KEY.")
