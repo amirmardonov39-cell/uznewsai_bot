@@ -893,7 +893,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("set_channel", set_channel_command))
     app.add_handler(CommandHandler("set_admin", set_admin_command))
-    app.add_handler(CallbackQueryHandler(publish_callback, pattern="^(pub|cancel|edit)\|.*"))
+    app.add_handler(CallbackQueryHandler(publish_callback, pattern=r"^(pub|cancel|edit)\|.*"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
     job_queue = app.job_queue
