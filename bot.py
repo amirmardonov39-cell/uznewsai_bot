@@ -307,6 +307,39 @@ async def extract_og_image(url: str) -> str:
         logger.error(f"Failed to extract og:image from {url}: {e}")
     return None
 
+def extract_youtube_video_id(url: str) -> str:
+    """Extracts the video ID from standard YouTube URLs"""
+    patterns = [
+        r"(?:v=|\/)([0-9A-Za-z_-]{11}).*",
+        r"youtu\.be\/([0-9A-Za-z_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE, payload: str):
+    await update.message.reply_chat_action(action="typing")
+    chat_prompt = f"""You are a helpful, professional AI Assistant running inside the @aileaderuz Telegram news bot. Your developer is Amir.
+You help the user (who is the admin) manage the tech news bot, answer their tech questions, or chat casually.
+Reply in Russian. Keep your answer brief, friendly, and well formatted without using any HTML tags.
+
+User says: {payload}"""
+
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=MODEL_ID,
+            contents=chat_prompt,
+        )
+        answer = response.text
+        answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        await update.message.reply_text(answer, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Chat failed: {e}")
+        await update.message.reply_text("Извини, я сейчас не могу ответить из-за проблем с сетью.")
+
 def fetch_latest_news():
     news_items = []
     
@@ -692,10 +725,47 @@ CRITICAL RULES:
             await update.message.reply_text(f"❌ Error: {e}")
         return
 
-    # If no state, process as a brand new manual text logic
-    logger.info("Replying with status message...")
+    # If no state, route the intent (News submission vs Chat command)
+    urls_for_intent = re.findall(r'(https?://[^\s]+)', str(text))
+    # It is a news submission IF:
+    # 1. Contains a link, OR
+    # 2. Has media (photo/video/document), OR
+    # 3. Was forwarded from somewhere, OR
+    # 4. Text is very long (> 150 chars)
+    is_news = (
+        bool(urls_for_intent) or 
+        bool(getattr(msg, 'photo', None)) or 
+        bool(getattr(msg, 'video', None)) or 
+        bool(getattr(msg, 'document', None)) or 
+        bool(getattr(msg, 'forward_origin', None)) or
+        bool(getattr(msg, 'forward_from_chat', None)) or
+        len(str(text)) > 150
+    )
+
+    if not is_news:
+        logger.info("Routing to Chat Command...")
+        await handle_chat_message(update, context, str(text))
+        return
+
+    logger.info("Replying with status message for News Post...")
     await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
     
+    # If it's just a YouTube link with no text, scrape the YouTube title to help the AI understand
+    extracted_yt_id = extract_youtube_video_id(str(text))
+    if extracted_yt_id and len(str(text).split()) == 1:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            resp = await asyncio.to_thread(requests.get, str(text), headers=headers, timeout=5)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                title = soup.find('title')
+                if title:
+                    yt_title = title.text.replace("- YouTube", "").strip()
+                    logger.info(f"Scraped YouTube title: {yt_title}")
+                    text = f"Видео с YouTube: {yt_title}\nСсылка: {text}"
+        except Exception as e:
+            logger.error(f"Failed to scrape YouTube title: {e}")
+
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
     logger.info(f"Translation returned. Success: {bool(translated)}")
@@ -746,10 +816,17 @@ CRITICAL RULES:
 
     # If NO media in Telegram at all, try scraping the original source link
     if not photo_url and link.startswith("http"):
-        logger.info(f"No media found in TG message, attempting to scrape original source: {link}")
-        scraped_img = await extract_og_image(link)
-        if scraped_img:
-            photo_url = scraped_img
+        # YouTube fast-path
+        yt_id = extract_youtube_video_id(link)
+        if yt_id:
+            logger.info(f"Detected YouTube link, returning maxres thumbnail for ID: {yt_id}")
+            photo_url = f"https://i.ytimg.com/vi/{yt_id}/maxresdefault.jpg"
+            media_type = "photo" # Thumbnails act as a photo block
+        else:
+            logger.info(f"No media found in TG message, attempting to scrape original source: {link}")
+            scraped_img = await extract_og_image(link)
+            if scraped_img:
+                photo_url = scraped_img
         
     # Absolute fallback
     if not photo_url:
