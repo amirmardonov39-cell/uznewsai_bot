@@ -406,7 +406,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
     # Check daily limit (max 10 per day)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now')")
+    cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != ''")
     count_today = cursor.fetchone()[0]
     conn.close()
     
@@ -466,8 +466,8 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         footer += "\n📢 @aileaderuz"
         
         # Safe truncation avoiding removing the footer links
-        if len(body) + len(footer) > 1024:
-            body = body[:1024 - len(footer) - 3] + "..."
+        if len(body) + len(footer) > 950:
+            body = body[:950 - len(footer) - 3] + "..."
         combined_caption = body + footer
             
         keyboard = InlineKeyboardMarkup([
@@ -756,8 +756,8 @@ CRITICAL RULES:
         footer += f"\n\n🔗 Источник: {link}"
     footer += "\n📢 @aileaderuz"
     
-    if len(body) + len(footer) > 1024:
-        body = body[:1024 - len(footer) - 3] + "..."
+    if len(body) + len(footer) > 950:
+        body = body[:950 - len(footer) - 3] + "..."
     caption_combined = body + footer
         
     keyboard = InlineKeyboardMarkup([
@@ -851,8 +851,8 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 footer += f"\n\n🔗 Источник: {link}"
             footer += "\n📢 @aileaderuz"
             
-            if len(body) + len(footer) > 1024:
-                body = body[:1024 - len(footer) - 3] + "..."
+            if len(body) + len(footer) > 950:
+                body = body[:950 - len(footer) - 3] + "..."
             caption_combined = body + footer
                 
             img_bytes = None
