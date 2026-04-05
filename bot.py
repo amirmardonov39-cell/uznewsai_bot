@@ -750,21 +750,20 @@ CRITICAL RULES:
     logger.info("Replying with status message for News Post...")
     await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
     
-    # If it's just a YouTube link with no text, scrape the YouTube title to help the AI understand
+    # If it's just a YouTube link with no text, fetch the YouTube title to help the AI understand
     extracted_yt_id = extract_youtube_video_id(str(text))
-    if extracted_yt_id and len(str(text).split()) == 1:
+    if extracted_yt_id and len(str(text).split()) <= 2:
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            resp = await asyncio.to_thread(requests.get, str(text), headers=headers, timeout=5)
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={extracted_yt_id}&format=json"
+            resp = await asyncio.to_thread(requests.get, oembed_url, timeout=5)
             if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                title = soup.find('title')
-                if title:
-                    yt_title = title.text.replace("- YouTube", "").strip()
-                    logger.info(f"Scraped YouTube title: {yt_title}")
+                data = resp.json()
+                yt_title = data.get("title", "")
+                if yt_title:
+                    logger.info(f"OEmbed YouTube title: {yt_title}")
                     text = f"Видео с YouTube: {yt_title}\nСсылка: {text}"
         except Exception as e:
-            logger.error(f"Failed to scrape YouTube title: {e}")
+            logger.error(f"Failed to fetch YouTube title via oEmbed: {e}")
 
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
