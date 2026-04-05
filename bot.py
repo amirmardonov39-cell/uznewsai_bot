@@ -203,8 +203,8 @@ async def process_and_translate(text_content: str) -> dict:
         uz_text = f"{emoji} {data.get('title_uz', '').strip()}\n\n" + "\n\n".join(uz_paras)
 
         return {
-            "ru": ru_text.strip(),
-            "uz": uz_text.strip(),
+            "ru": ru_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
+            "uz": uz_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
             "title_ru": data.get('title_ru', 'News').strip(),
             "image_prompt": data.get('image_prompt', 'digital technology ai')
         }
@@ -234,8 +234,8 @@ async def process_and_translate(text_content: str) -> dict:
                 uz_text = f"{emoji} {data.get('title_uz', '').strip()}\n\n" + "\n\n".join(uz_paras)
         
                 return {
-                    "ru": ru_text.strip(),
-                    "uz": uz_text.strip(),
+                    "ru": ru_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
+                    "uz": uz_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
                     "title_ru": data.get('title_ru', 'News').strip(),
                     "image_prompt": data.get('image_prompt', 'digital technology ai')
                 }
@@ -641,19 +641,20 @@ CRITICAL RULES:
                 await update.message.reply_text("❌ Нейросеть отклонила текст.")
                 return
                 
-            new_ru = data.get("ru", "")
-            new_uz = data.get("uz", "")
+            new_ru = data.get("ru", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            new_uz = data.get("uz", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             
             # Update DB
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("UPDATE articles SET text_ru = ?, text_uz = ? WHERE id = ?", (new_ru, new_uz, article_id))
-            cursor.execute("SELECT photo_url FROM articles WHERE id = ?", (article_id,))
-            photo_row = cursor.fetchone()
+            cursor.execute("SELECT photo_url, media_type FROM articles WHERE id = ?", (article_id,))
+            row = cursor.fetchone()
             conn.commit()
             conn.close()
             
-            photo_url = photo_row[0] if photo_row else DEFAULT_IMAGE
+            photo_url = row[0] if row else DEFAULT_IMAGE
+            media_type = row[1] if row and len(row) > 1 and row[1] else "photo"
             
             caption_ru = f"🇷🇺 <b>НОВАЯ НОВОСТЬ ДЛЯ ПУБЛИКАЦИИ:</b>\n\n{new_ru}"
             safe_text = caption_ru[:800] + "..." if len(caption_ru) > 800 else caption_ru
@@ -672,12 +673,21 @@ CRITICAL RULES:
             if photo_url and photo_url.startswith("http"):
                 img_bytes = await download_image(photo_url)
             
-            await update.message.reply_photo(
-                photo=img_bytes if img_bytes else DEFAULT_IMAGE,
-                caption=caption_ru,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
+            final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
+            if media_type == "video" and not img_bytes:
+                await update.message.reply_video(
+                    video=final_photo,
+                    caption=caption_ru,
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+            else:
+                await update.message.reply_photo(
+                    photo=final_photo,
+                    caption=caption_ru,
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
         except Exception as e:
             await update.message.reply_text(f"❌ Error: {e}")
         return
