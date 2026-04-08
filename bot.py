@@ -748,11 +748,10 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 media_type = row[1] if row and len(row) > 1 and row[1] else "photo"
                 
                 caption_ru = f"🇷🇺 <b>НОВАЯ НОВОСТЬ ДЛЯ ПУБЛИКАЦИИ:</b>\n\n{new_ru}"
-                safe_text = caption_ru[:800] + "..." if len(caption_ru) > 800 else caption_ru
-                caption_ru = f"{safe_text}\n📢 @aileaderuz"
+                caption_ru = f"{caption_ru}\n📢 @aileaderuz"
                 
-                if len(caption_ru) > 1024:
-                    caption_ru = caption_ru[:1024]
+                if len(caption_ru) > 4000:
+                    caption_ru = caption_ru[:4000] + "..."
                     
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -765,20 +764,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     img_bytes = await download_image(photo_url)
                 
                 final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
-                if media_type == "video" and not img_bytes:
-                    await update.message.reply_video(
-                        video=final_photo,
-                        caption=caption_ru,
-                        reply_markup=keyboard,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await update.message.reply_photo(
-                        photo=final_photo,
-                        caption=caption_ru,
-                        reply_markup=keyboard,
-                        parse_mode="HTML"
-                    )
+                await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_ru, keyboard)
                 break
             except Exception as e:
                 err_str = str(e).replace("<", "&lt;").replace(">", "&gt;")
@@ -913,8 +899,6 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         footer += f"\n\n🔗 Источник: {link}"
     footer += "\n📢 @aileaderuz"
     
-    if len(body) + len(footer) > 950:
-        body = body[:950 - len(footer) - 3] + "..."
     caption_combined = body + footer
         
     keyboard = InlineKeyboardMarkup([
