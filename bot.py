@@ -37,7 +37,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 
 # Initialize Gemini Client
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_ID = "gemini-2.0-flash"
+MODEL_ID = "gemini-2.5-flash-lite"
 
 class TranslatedArticle(BaseModel):
     emoji: str = Field(description="One tight, relevant emoji, e.g. ⚡️", default="⚡️")
