@@ -40,16 +40,36 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_ID = "gemini-2.5-flash"
 
 class TranslatedArticle(BaseModel):
-    emoji: str = Field(description="One relevant emoji, max 2 chars", default="📰")
-    title_ru: str = Field(description="Catchy title in Russian", default="")
-    title_uz: str = Field(description="Catchy title in Uzbek", default="")
-    p1_ru: str = Field(description="Paragraph 1 (Catchy Headline)", default="")
-    p1_uz: str = Field(description="Paragraph 1 (Catchy Headline)", default="")
-    p2_ru: str = Field(description="Paragraph 2 (Details/Why it matters)", default="")
-    p2_uz: str = Field(description="Paragraph 2 (Details/Why it matters)", default="")
-    p3_ru: str = Field(description="Paragraph 3 (Actionable takeaway/Conclusion)", default="")
-    p3_uz: str = Field(description="Paragraph 3 (Actionable takeaway/Conclusion)", default="")
-    image_prompt: str = Field(description="Short English prompt for AI image (max 10 words, keywords only, e.g. 'fintech artificial intelligence bubble')", default="digital technology artificial intelligence")
+    emoji: str = Field(description="One tight, relevant emoji, e.g. ⚡️", default="⚡️")
+    headline_ru: str = Field(description="Catchy but professional headline in Russian", default="")
+    headline_uz: str = Field(description="Same headline in Uzbek", default="")
+    analysis_ru: str = Field(description="Full deep analysis text in Russian (2-4 paragraphs). Do NOT shorten.", default="")
+    analysis_uz: str = Field(description="Full deep analysis text in Uzbek (2-4 paragraphs). Must match Russian exactly.", default="")
+    hashtags: str = Field(description="1-2 narrow tags like #CyberLaw #AI", default="#TechNews #AI")
+    image_prompt: str = Field(description="Short English prompt for AI image", default="digital technology artificial intelligence")
+
+async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
+    """Sends photo or video. If caption > 1024 chars, sends text as a separate message."""
+    if len(caption_combined) <= 1024:
+        if media_type == "video" and isinstance(final_photo, str) and not final_photo.startswith("http"):
+            return await context.bot.send_video(chat_id=chat_id, video=final_photo, caption=caption_combined, reply_markup=keyboard, parse_mode="HTML")
+        else:
+            return await context.bot.send_photo(chat_id=chat_id, photo=final_photo, caption=caption_combined, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        # Long text 1024+ bypass
+        if media_type == "video" and isinstance(final_photo, str) and not final_photo.startswith("http"):
+            msg = await context.bot.send_video(chat_id=chat_id, video=final_photo)
+        else:
+            msg = await context.bot.send_photo(chat_id=chat_id, photo=final_photo)
+            
+        return await context.bot.send_message(
+            chat_id=chat_id,
+            text=caption_combined,
+            reply_to_message_id=msg.message_id,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -132,17 +152,21 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """You are a top-tier global tech expert, analyst, and bilingual copywriter (Uzbek & Russian).
-Your goal is to write highly professional, insightful, and intriguing news summaries that captivate the reader.
-1. Write in Official Russian and Native-level Official Uzbek. STRICT LANGUAGE ISOLATION: The Uzbek translation MUST ONLY contain pure Uzbek words. Do NOT include Russian words in the Uzbek translation. The tone must be serious, analytical, and professional. Completely avoid using emojis in the text body!
-2. COMBINED LENGTH LIMIT: Keep each language translation STRICTLY UNDER 400 characters total. Fit both languages together in one Telegram Post (max 1024 chars).
-3. Do NOT include HTML tags.
-4. Intrigue the reader! Make the headlines compelling and the takeaways thought-provoking. Always provide exactly 3 distinct paragraphs per language. DO NOT use any robotic prefixes like "Суть:", "Контекст:", or "Итог:". Just write 3 flowing paragraphs:
-   - p1: Catchy, intriguing headline/introductory paragraph.
-   - p2: Context and details explaining why this changes the industry.
-   - p3: Thought-provoking takeaway or future impact insight.
-5. Generate an `image_prompt` in ENGLISH (max 6 keywords) representing the exact topic visually (e.g., "nvidia chip glowing", "cybersecurity code screen").
-6. This channel is STRICTLY about Tech, AI, Startups. If the text is completely unrelated to these topics, YOU MUST SET THE EMOJI FIELD EXACTLY TO: 🚫"""
+SYSTEM_PROMPT = """ТВОЯ РОЛЬ:
+Ты — высококвалифицированный эксперт-аналитик, юрист в сфере IT и профессиональный синхронный переводчик. Твоя задача — обрабатывать входящие новости по темам: Искусственный Интеллект (AI), Кибербезопасность (Cybersecurity) и Финтех-право (FinTech Law), и готовить их для публикации.
+
+ТВОИ ГЛАВНЫЕ ПРАВИЛА (СТРОГО К ИСПОЛНЕНИЮ):
+1. Никакой синтетики и выдумок: Опирайся строго на предоставленный текст из открытого источника. Не придумывай факты.
+2. Полное раскрытие сути (Не сокращать!): Не делай коротких "выжимок". Ты должен до конца договаривать каждую новость. Раскрой:
+   - Что именно произошл?
+   - В чем техническая или юридическая суть?
+   - Каковы последствия для рынка, закона или безопасности?
+3. Экспертный перевод (RU и UZ): Перевод должен быть профессиональным, сохраняя IT- и юридическую терминологию.
+4. Паритет языков: Объем текста на узбекском (🇺🇿) должен быть абсолютно равен объему текста на русском (🇷🇺). Запрещено сокращать узбекскую версию. Узбекский язык должен быть академически грамотным (используй термины: Sun'iy intellekt, Kiberxavfsizlik, Moliyaviy texnologiyalar).
+5. Без обрывов: Текст должен иметь логическое начало, развернутую основную часть и завершенную мысль. Никаких оборванных фраз.
+6. ВАЖНО: Вы должны возвращать JSON формата TranslatedArticle.
+7. НЕ используйте HTML теги (никаких <b> или <br>). Сплошной текст, абзацы разделяйте переносами строк.
+8. Если текст не связан с ИТ/AI, верните emoji 🚫."""
 
 # Keywords that MUST be present for RSS items (at least one) to pass pre-filter
 TECH_KEYWORDS = [
@@ -181,33 +205,44 @@ async def download_image(url: str, timeout: int = 30) -> bytes:
 
 async def process_and_translate(text_content: str) -> dict:
     prompt = f"{SYSTEM_PROMPT}\n\nText to process:\n{text_content}"
+    
+    def parse_gemini_json(response_text: str) -> dict:
+        data = json.loads(response_text)
+        emoji = data.get("emoji", "⚡️")
+        
+        ru_header_ru = data.get('headline_ru', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header_uz = data.get('headline_uz', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header = f"{emoji} <b>{ru_header_ru}</b> | <b>{ru_header_uz}</b>"
+        
+        analysis_ru = data.get('analysis_ru', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_text = f"{ru_header}\n\n🇷🇺 <b>Аналитика:</b>\n{analysis_ru}"
+        
+        analysis_uz = data.get('analysis_uz', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        hashtags = data.get('hashtags', '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        uz_text = f"🇺🇿 <b>Tahlil:</b>\n{analysis_uz}\n\n🏷 {hashtags}"
+
+        return {
+            "ru": ru_text,
+            "uz": uz_text,
+            "title_ru": ru_header_ru,
+            "image_prompt": data.get('image_prompt', 'digital technology ai').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        }
+
+    generator_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=TranslatedArticle,
+        temperature=0.3,
+        max_output_tokens=3000
+    )
+
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=MODEL_ID,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=TranslatedArticle,
-                temperature=0.3
-            )
+            config=generator_config
         )
-        data = json.loads(response.text)
-            
-        emoji = data.get("emoji", "📰")
-        
-        ru_paras = [data.get(k, '').strip() for k in ['p1_ru', 'p2_ru', 'p3_ru'] if data.get(k, '').strip()]
-        ru_text = f"{emoji} {data.get('title_ru', '').strip()}\n\n" + "\n\n".join(ru_paras)
-        
-        uz_paras = [data.get(k, '').strip() for k in ['p1_uz', 'p2_uz', 'p3_uz'] if data.get(k, '').strip()]
-        uz_text = f"{emoji} {data.get('title_uz', '').strip()}\n\n" + "\n\n".join(uz_paras)
-
-        return {
-            "ru": ru_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-            "uz": uz_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-            "title_ru": data.get('title_ru', 'News').strip(),
-            "image_prompt": data.get('image_prompt', 'digital technology ai')
-        }
+        return parse_gemini_json(response.text)
     except Exception as e:
         if "429" in str(e):
             logger.warning("Gemini 429 Quota Exceeded. Sleeping 15s before retry...")
@@ -217,28 +252,9 @@ async def process_and_translate(text_content: str) -> dict:
                     client.models.generate_content,
                     model=MODEL_ID,
                     contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=TranslatedArticle,
-                        temperature=0.3
-                    )
+                    config=generator_config
                 )
-                data = json.loads(response.text)
-                    
-                emoji = data.get("emoji", "📰")
-                
-                ru_paras = [data.get(k, '').strip() for k in ['p1_ru', 'p2_ru', 'p3_ru'] if data.get(k, '').strip()]
-                ru_text = f"{emoji} {data.get('title_ru', '').strip()}\n\n" + "\n\n".join(ru_paras)
-                
-                uz_paras = [data.get(k, '').strip() for k in ['p1_uz', 'p2_uz', 'p3_uz'] if data.get(k, '').strip()]
-                uz_text = f"{emoji} {data.get('title_uz', '').strip()}\n\n" + "\n\n".join(uz_paras)
-        
-                return {
-                    "ru": ru_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-                    "uz": uz_text.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-                    "title_ru": data.get('title_ru', 'News').strip(),
-                    "image_prompt": data.get('image_prompt', 'digital technology ai')
-                }
+                return parse_gemini_json(response.text)
             except Exception as e2:
                 logger.error(f"Fallback failed. API Error: {e2}")
         else:
@@ -492,15 +508,14 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             continue
             
         # 3. Send preview to Admin for review
-        body = f"🇷🇺 {text_ru}\n\n➖➖➖\n\n🇺🇿 {text_uz}"
+        body = f"{text_ru}\n\n{text_uz}"
         footer = ""
         if not url.startswith("manual_"):
             footer += f"\n\n🔗 Источник: {url}"
         footer += "\n📢 @aileaderuz"
         
         # Safe truncation avoiding removing the footer links
-        if len(body) + len(footer) > 950:
-            body = body[:950 - len(footer) - 3] + "..."
+        pass # no truncation
         combined_caption = body + footer
             
         keyboard = InlineKeyboardMarkup([
@@ -516,13 +531,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         final_photo = img_bytes if img_bytes else DEFAULT_IMAGE
         
         try:
-            await context.bot.send_photo(
-                chat_id=admin_id,
-                photo=final_photo,
-                caption=combined_caption,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
+            await send_article_media(context, admin_id, final_photo, media_type, combined_caption, keyboard)
             processed_count = processed_count + 1
         except Exception as e:
             logger.error(f"Failed to send to admin {admin_id}: {e}")
@@ -638,24 +647,22 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         old_text = article_row[0]
         await update.message.reply_text("⏳ Переписываю новость по вашим инструкциям...")
         
-        REVISION_PROMPT = f"""You are a top-tier global tech analyst and bilingual copywriter.
-The user wants to revise a previously generated news post.
-Current text:
+        REVISION_PROMPT = f"""ТВОЯ РОЛЬ:
+Ты — высококвалифицированный эксперт-аналитик, юрист в сфере IT.
+Пользователь хочет изменить сгенерированную новость.
+Текущий текст новости:
 {old_text}
 
-User Edit Instruction:
+Инструкция от пользователя:
 {text}
 
-Please rewrite the news according to the user's instructions.
-CRITICAL RULES:
-1. You MUST keep the EXACT same JSON schema response format (TranslatedArticle).
-2. Do NOT include HTML tags in the text fields (no <b> or <br>), just plain text.
-3. Keep the 3 paragraphs concise (max 150 chars per field).
-4. Provide translation in Official Russian and Native-level Official Uzbek.
-5. Always provide exactly 3 distinct paragraphs following this strict structure:
-   - p1: Catchy, intriguing headline/introductory paragraph.
-   - p2: Context and details explaining why this changes the industry.
-   - p3: Thought-provoking takeaway or future impact insight."""
+Перепиши новость, учитывая замечания пользователя.
+ТВОИ ПРАВИЛА:
+1. Вы должны вернуть JSON строго формата TranslatedArticle.
+2. НЕ используйте HTML теги (никаких <b> или <br>). Сплошной текст, абзацы разделяйте переносами строк.
+3. Полностью раскрой суть, не делай коротких "выжимок". Отрази технические/юридические аспекты.
+4. Объем текста на узбекском (🇺🇿) должен быть абсолютно равен тексту на русском (🇷🇺)."""
+
 
         try:
             response = await asyncio.to_thread(
@@ -674,9 +681,19 @@ CRITICAL RULES:
                 await update.message.reply_text("❌ Нейросеть отклонила текст.")
                 return
                 
-            new_ru = data.get("ru", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            new_uz = data.get("uz", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            from bot import parse_gemini_json # We use global parse function now if it was moved, wait we did not move it.
+            # Lets recreate the logic here
+            emoji = data.get("emoji", "⚡️")
+            ru_head_ru = data.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            ru_head_uz = data.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            ru_h = f"{emoji} <b>{ru_head_ru}</b> | <b>{ru_head_uz}</b>"
+            a_ru = data.get("analysis_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            a_uz = data.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            h_tags = data.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             
+            new_ru = f"{ru_h}\n\n🇷🇺 <b>Аналитика:</b>\n{a_ru}"
+            new_uz = f"🇺🇿 <b>Tahlil:</b>\n{a_uz}\n\n🏷 {h_tags}"
+
             # Update DB
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -861,31 +878,13 @@ CRITICAL RULES:
     
     try:
         final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
-        if media_type == "video" and not img_bytes:
-            await update.message.reply_video(
-                video=final_photo,
-                caption=caption_combined,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        else:
-            await update.message.reply_photo(
-                photo=final_photo,
-                caption=caption_combined,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
+        await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_combined, keyboard)
     except Exception as photo_err:
         if "Can't use file of type" in str(photo_err) and photo_url and not photo_url.startswith("http"):
             try:
                 tg_file = await context.bot.get_file(photo_url)
                 downloaded_bytes = bytes(await tg_file.download_as_bytearray())
-                await update.message.reply_photo(
-                    photo=downloaded_bytes,
-                    caption=caption_combined,
-                    reply_markup=keyboard,
-                    parse_mode="HTML"
-                )
+                await send_article_media(context, update.message.chat_id, downloaded_bytes, media_type, caption_combined, keyboard)
                 return
             except Exception as dl_err:
                 logger.error(f"Fallback download failed: {dl_err}")
@@ -931,14 +930,13 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Handle schema updates where media_type might be None for old articles
             link, text_uz, text_ru, photo_url, media_type = row
             media_type = media_type or "photo"
-            body = f"{text_uz}\n\n➖➖➖\n\n{text_ru}"
+            body = f"{text_ru}\n\n{text_uz}"
             footer = ""
             if not link.startswith("manual_"):
                 footer += f"\n\n🔗 Источник: {link}"
             footer += "\n📢 @aileaderuz"
             
-            if len(body) + len(footer) > 950:
-                body = body[:950 - len(footer) - 3] + "..."
+            pass # no truncation
             caption_combined = body + footer
                 
             img_bytes = None
@@ -950,40 +948,14 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             
             try:
                 final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
-                if media_type == "video" and not img_bytes:
-                    await context.bot.send_video(
-                        chat_id=channel_id,
-                        video=final_photo,
-                        caption=caption_combined,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await context.bot.send_photo(
-                        chat_id=channel_id,
-                        photo=final_photo,
-                        caption=caption_combined,
-                        parse_mode="HTML"
-                    )
+                await send_article_media(context, channel_id, final_photo, media_type, caption_combined)
                 await query.edit_message_caption(caption=f"✅ Опубликовано в канал!\n\n{caption_combined}", reply_markup=None, parse_mode="HTML")
             except Exception as photo_err:
                 if "Can't use file of type" in str(photo_err) and photo_url and not photo_url.startswith("http"):
                     try:
                         tg_file = await context.bot.get_file(photo_url)
                         downloaded_bytes = bytes(await tg_file.download_as_bytearray())
-                        if media_type == "video":
-                            await context.bot.send_video(
-                                chat_id=channel_id,
-                                video=downloaded_bytes,
-                                caption=caption_combined,
-                                parse_mode="HTML"
-                            )
-                        else:
-                            await context.bot.send_photo(
-                                chat_id=channel_id,
-                                photo=downloaded_bytes,
-                                caption=caption_combined,
-                                parse_mode="HTML"
-                            )
+                        await send_article_media(context, channel_id, downloaded_bytes, media_type, caption_combined)
                         await query.edit_message_caption(caption=f"✅ Опубликовано в канал! (через обход Telegram API)\n\n{caption_combined}", reply_markup=None, parse_mode="HTML")
                         return
                     except Exception as dl_err:
