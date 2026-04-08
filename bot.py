@@ -207,25 +207,30 @@ async def process_and_translate(text_content: str) -> dict:
     prompt = f"{SYSTEM_PROMPT}\n\nText to process:\n{text_content}"
     
     def parse_gemini_json(response_text: str) -> dict:
-        data = json.loads(response_text)
-        emoji = data.get("emoji", "⚡️")
+        try:
+            data = json.loads(response_text)
+        except Exception:
+            # Fallback if somehow json parsing fails
+            return {"error": f"JSON Decode Error: {response_text}"}
+            
+        emoji = data.get("emoji") or "⚡️"
         
-        ru_header_ru = data.get('headline_ru', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ru_header_uz = data.get('headline_uz', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header_ru = (data.get('headline_ru') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header_uz = (data.get('headline_uz') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header = f"{emoji} <b>{ru_header_ru}</b> | <b>{ru_header_uz}</b>"
         
-        analysis_ru = data.get('analysis_ru', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        analysis_ru = (data.get('analysis_ru') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_text = f"{ru_header}\n\n🇷🇺 <b>Аналитика:</b>\n{analysis_ru}"
         
-        analysis_uz = data.get('analysis_uz', '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        hashtags = data.get('hashtags', '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        analysis_uz = (data.get('analysis_uz') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         uz_text = f"🇺🇿 <b>Tahlil:</b>\n{analysis_uz}\n\n🏷 {hashtags}"
 
         return {
             "ru": ru_text,
             "uz": uz_text,
             "title_ru": ru_header_ru,
-            "image_prompt": data.get('image_prompt', 'digital technology ai').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            "image_prompt": (data.get('image_prompt') or 'digital technology ai').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         }
 
     generator_config = types.GenerateContentConfig(
@@ -257,9 +262,10 @@ async def process_and_translate(text_content: str) -> dict:
                 return parse_gemini_json(response.text)
             except Exception as e2:
                 logger.error(f"Fallback failed. API Error: {e2}")
+                return {"error": f"API Error Retry: {str(e2)}"}
         else:
             logger.error(f"Gemini API Error: {e}")
-        return None
+            return {"error": f"API Error: {str(e)}"}
 
 SOURCES = {
     "telegram": [
@@ -486,7 +492,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         # 1. Translate via Gemini
         translated = await process_and_translate(item['text'])
         
-        if not translated:
+        if not translated or "error" in translated:
             continue
 
         # Skip if Gemini flagged it as off-topic (title starts with 🚫)
@@ -785,8 +791,10 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
     logger.info(f"Translation returned. Success: {bool(translated)}")
-    if not translated:
-        await update.message.reply_text("❌ Ошибка при обращении к API Gemini (возможно, исчерпан лимит). Попробуйте позже.")
+    if not translated or "error" in translated:
+        err_str = translated.get("error", "Unknown error") if translated else "Internal Fallback Error"
+        err_str = str(err_str).replace("<", "&lt;").replace(">", "&gt;")
+        await update.message.reply_text(f"❌ Системная ошибка ИИ.\n\nТехническая деталь: <code>{err_str}</code>\n\n(Возможно, статья слишком короткая, либо это внутренняя ошибка Gemini API)", parse_mode="HTML")
         return
         
     # --- Advanced link extraction for manual posts (do this FIRST) ---
