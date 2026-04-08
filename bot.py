@@ -240,32 +240,30 @@ async def process_and_translate(text_content: str) -> dict:
         max_output_tokens=3000
     )
 
-    try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=MODEL_ID,
-            contents=prompt,
-            config=generator_config
-        )
-        return parse_gemini_json(response.text)
-    except Exception as e:
-        if "429" in str(e):
-            logger.warning("Gemini 429 Quota Exceeded. Sleeping 15s before retry...")
-            await asyncio.sleep(15)
-            try:
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=MODEL_ID,
-                    contents=prompt,
-                    config=generator_config
-                )
-                return parse_gemini_json(response.text)
-            except Exception as e2:
-                logger.error(f"Fallback failed. API Error: {e2}")
-                return {"error": f"API Error Retry: {str(e2)}"}
-        else:
-            logger.error(f"Gemini API Error: {e}")
-            return {"error": f"API Error: {str(e)}"}
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=MODEL_ID,
+                contents=prompt,
+                config=generator_config
+            )
+            return parse_gemini_json(response.text)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "503" in err_str:
+                if attempt < max_retries - 1:
+                    sleep_time = 15 * (attempt + 1)
+                    logger.warning(f"Gemini API limit/demand (503/429). Retry {attempt + 1}/{max_retries} in {sleep_time}s...")
+                    await asyncio.sleep(sleep_time)
+                    continue
+                else:
+                    logger.error(f"Fallback failed after {max_retries} retries. API Error: {err_str}")
+                    return {"error": f"API Error (Retries exhausted): {err_str}"}
+            else:
+                logger.error(f"Gemini API Error: {err_str}")
+                return {"error": f"API Error: {err_str}"}
 
 SOURCES = {
     "telegram": [
@@ -349,18 +347,34 @@ Reply in Russian. Keep your answer brief, friendly, and well formatted without u
 
 User says: {payload}"""
 
-    try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=MODEL_ID,
-            contents=chat_prompt,
-        )
-        answer = response.text
-        answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        await update.message.reply_text(answer, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Chat failed: {e}")
-        await update.message.reply_text("Извини, я сейчас не могу ответить из-за проблем с сетью.")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=MODEL_ID,
+                contents=chat_prompt,
+            )
+            answer = response.text
+            answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            await update.message.reply_text(answer, parse_mode="HTML")
+            return
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "503" in err_str:
+                if attempt < max_retries - 1:
+                    sleep_time = 15 * (attempt + 1)
+                    logger.warning(f"Chat retry {attempt + 1}/{max_retries} in {sleep_time}s...")
+                    await asyncio.sleep(sleep_time)
+                    continue
+                else:
+                    logger.error(f"Chat failed after retries: {err_str}")
+                    await update.message.reply_text("Извини, нейросеть перегружена. Попробуй позже.")
+                    return
+            else:
+                logger.error(f"Chat failed: {err_str}")
+                await update.message.reply_text("Извини, я сейчас не могу ответить из-за проблем с сетью.")
+                return
 
 def fetch_latest_news():
     news_items = []
@@ -670,82 +684,93 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 4. Объем текста на узбекском (🇺🇿) должен быть абсолютно равен тексту на русском (🇷🇺)."""
 
 
-        try:
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=MODEL_ID,
-                contents="Revise the text.",
-                config=types.GenerateContentConfig(
-                    system_instruction=REVISION_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=TranslatedArticle,
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=MODEL_ID,
+                    contents="Revise the text.",
+                    config=types.GenerateContentConfig(
+                        system_instruction=REVISION_PROMPT,
+                        response_mime_type="application/json",
+                        response_schema=TranslatedArticle,
+                    )
                 )
-            )
-            data = json.loads(response.text)
-            
-            if data.get("reject"):
-                await update.message.reply_text("❌ Нейросеть отклонила текст.")
-                return
+                data = json.loads(response.text)
                 
-            from bot import parse_gemini_json # We use global parse function now if it was moved, wait we did not move it.
-            # Lets recreate the logic here
-            emoji = data.get("emoji", "⚡️")
-            ru_head_ru = data.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            ru_head_uz = data.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            ru_h = f"{emoji} <b>{ru_head_ru}</b> | <b>{ru_head_uz}</b>"
-            a_ru = data.get("analysis_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            a_uz = data.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            h_tags = data.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            
-            new_ru = f"{ru_h}\n\n🇷🇺 <b>Аналитика:</b>\n{a_ru}"
-            new_uz = f"🇺🇿 <b>Tahlil:</b>\n{a_uz}\n\n🏷 {h_tags}"
+                if data.get("reject"):
+                    await update.message.reply_text("❌ Нейросеть отклонила текст.")
+                    return
+                    
+                emoji = data.get("emoji", "⚡️")
+                ru_head_ru = data.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                ru_head_uz = data.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                ru_h = f"{emoji} <b>{ru_head_ru}</b> | <b>{ru_head_uz}</b>"
+                a_ru = data.get("analysis_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                a_uz = data.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                h_tags = data.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                
+                new_ru = f"{ru_h}\n\n🇷🇺 <b>Аналитика:</b>\n{a_ru}"
+                new_uz = f"🇺🇿 <b>Tahlil:</b>\n{a_uz}\n\n🏷 {h_tags}"
 
-            # Update DB
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE articles SET text_ru = ?, text_uz = ? WHERE id = ?", (new_ru, new_uz, article_id))
-            cursor.execute("SELECT photo_url, media_type FROM articles WHERE id = ?", (article_id,))
-            row = cursor.fetchone()
-            conn.commit()
-            conn.close()
-            
-            photo_url = row[0] if row else DEFAULT_IMAGE
-            media_type = row[1] if row and len(row) > 1 and row[1] else "photo"
-            
-            caption_ru = f"🇷🇺 <b>НОВАЯ НОВОСТЬ ДЛЯ ПУБЛИКАЦИИ:</b>\n\n{new_ru}"
-            safe_text = caption_ru[:800] + "..." if len(caption_ru) > 800 else caption_ru
-            caption_ru = f"{safe_text}\n📢 @aileaderuz"
-            
-            if len(caption_ru) > 1024:
-                caption_ru = caption_ru[:1024]
+                # Update DB
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("UPDATE articles SET text_ru = ?, text_uz = ? WHERE id = ?", (new_ru, new_uz, article_id))
+                cursor.execute("SELECT photo_url, media_type FROM articles WHERE id = ?", (article_id,))
+                row = cursor.fetchone()
+                conn.commit()
+                conn.close()
                 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
-                [InlineKeyboardButton("✏️ Изменить", callback_data=f"edit|{article_id}")],
-                [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel|{article_id}")]
-            ])
-            
-            img_bytes = None
-            if photo_url and photo_url.startswith("http"):
-                img_bytes = await download_image(photo_url)
-            
-            final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
-            if media_type == "video" and not img_bytes:
-                await update.message.reply_video(
-                    video=final_photo,
-                    caption=caption_ru,
-                    reply_markup=keyboard,
-                    parse_mode="HTML"
-                )
-            else:
-                await update.message.reply_photo(
-                    photo=final_photo,
-                    caption=caption_ru,
-                    reply_markup=keyboard,
-                    parse_mode="HTML"
-                )
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+                photo_url = row[0] if row else DEFAULT_IMAGE
+                media_type = row[1] if row and len(row) > 1 and row[1] else "photo"
+                
+                caption_ru = f"🇷🇺 <b>НОВАЯ НОВОСТЬ ДЛЯ ПУБЛИКАЦИИ:</b>\n\n{new_ru}"
+                safe_text = caption_ru[:800] + "..." if len(caption_ru) > 800 else caption_ru
+                caption_ru = f"{safe_text}\n📢 @aileaderuz"
+                
+                if len(caption_ru) > 1024:
+                    caption_ru = caption_ru[:1024]
+                    
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
+                    [InlineKeyboardButton("✏️ Изменить", callback_data=f"edit|{article_id}")],
+                    [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel|{article_id}")]
+                ])
+                
+                img_bytes = None
+                if photo_url and photo_url.startswith("http"):
+                    img_bytes = await download_image(photo_url)
+                
+                final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
+                if media_type == "video" and not img_bytes:
+                    await update.message.reply_video(
+                        video=final_photo,
+                        caption=caption_ru,
+                        reply_markup=keyboard,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await update.message.reply_photo(
+                        photo=final_photo,
+                        caption=caption_ru,
+                        reply_markup=keyboard,
+                        parse_mode="HTML"
+                    )
+                break
+            except Exception as e:
+                err_str = str(e).replace("<", "&lt;").replace(">", "&gt;")
+                if "429" in err_str or "503" in err_str:
+                    if attempt < max_retries - 1:
+                        sleep_time = 15 * (attempt + 1)
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    else:
+                        await update.message.reply_text(f"❌ Нейросеть перегружена. Попробуйте позже.\n\nОшибка: {err_str}")
+                else:
+                    await update.message.reply_text(f"❌ Системная ошибка:\n\n<code>{err_str}</code>", parse_mode="HTML")
+                    break
         return
 
     # If no state, route the intent (News submission vs Chat command)
