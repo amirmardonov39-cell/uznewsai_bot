@@ -37,7 +37,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 
 # Initialize Gemini Client
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_ID = "gemini-1.5-pro"
+MODEL_ID = "gemini-2.5-flash"
 
 class TranslatedArticle(BaseModel):
     emoji: str = Field(description="One tight, relevant emoji, e.g. ⚡️", default="⚡️")
@@ -515,8 +515,17 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             save_article(url, "", "", "")
             continue
             
-        text_uz = translated['uz']
-        text_ru = translated['ru']
+        emoji = translated.get("emoji", "⚡️")
+        ru_head_ru = translated.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_head_uz = translated.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_h = f"{emoji} <b>{ru_head_ru}</b> | <b>{ru_head_uz}</b>"
+        a_ru = translated.get("analysis_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        a_uz = translated.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        h_tags = translated.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        
+        text_ru = f"{ru_h}\n\n🇷🇺 <b>Аналитика:</b>\n{a_ru}"
+        text_uz = f"🇺🇿 <b>Tahlil:</b>\n{a_uz}\n\n🏷 {h_tags}"
+        
         photo_url = item['photo_url']
         
         if not photo_url or photo_url == DEFAULT_IMAGE:
