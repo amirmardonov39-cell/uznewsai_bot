@@ -56,6 +56,25 @@ def strip_artificial_words(text: str) -> str:
     text = re.sub(r'\bMUHIM:\s*', '', text)
     return text
 
+def truncate_to_sentence(text: str, limit: int) -> str:
+    """
+    If text exceeds `limit` chars, cuts at the last complete sentence
+    (ending with . ! ?) within the limit. Never leaves an ellipsis —
+    the result always ends with proper punctuation.
+    """
+    if len(text) <= limit:
+        return text
+    chunk = text[:limit]
+    # Find the last sentence-ending punctuation
+    match = re.search(r'[.!?][^.!?]*$', chunk)
+    if match:
+        return chunk[:match.start() + 1]  # include the punctuation
+    # No sentence boundary found — cut at last space and add a period
+    cut = chunk.rsplit(' ', 1)[0].rstrip()
+    if cut and cut[-1] not in '.!?':
+        cut += '.'
+    return cut
+
 _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
 def _visible_len(html_text: str) -> int:
@@ -86,10 +105,10 @@ def safe_caption(text: str, limit: int = 1024) -> str:
     footer_vis = _visible_len(footer)
     body_limit = limit - footer_vis
 
-    # Strip HTML from body and truncate at word boundary
+    # Strip HTML from body and truncate at last sentence boundary
     body_plain = _HTML_TAG_RE.sub('', body)
     if len(body_plain) > body_limit:
-        body_plain = body_plain[:body_limit - 1].rsplit(' ', 1)[0] + '…'
+        body_plain = truncate_to_sentence(body_plain, body_limit)
 
     return body_plain + footer
 
@@ -258,17 +277,14 @@ async def process_and_translate(text_content: str) -> dict:
         ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # Hard-limit each analysis to 350 visible chars so combined caption
-        # stays well within Telegram's 1024-char caption limit.
+        # Hard-limit each analysis to 350 visible chars, ending on a full sentence.
         analysis_ru_raw = strip_artificial_words((data.get('analysis_ru') or '').strip())
         analysis_ru_raw = analysis_ru_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        if len(analysis_ru_raw) > 350:
-            analysis_ru_raw = analysis_ru_raw[:348].rsplit(' ', 1)[0] + '…'
+        analysis_ru_raw = truncate_to_sentence(analysis_ru_raw, 350)
 
         analysis_uz_raw = strip_artificial_words((data.get('analysis_uz') or '').strip())
         analysis_uz_raw = analysis_uz_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        if len(analysis_uz_raw) > 350:
-            analysis_uz_raw = analysis_uz_raw[:348].rsplit(' ', 1)[0] + '…'
+        analysis_uz_raw = truncate_to_sentence(analysis_uz_raw, 350)
 
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
