@@ -152,33 +152,24 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """ТВОЯ РОЛЬ:
-Ты — высококвалифицированный эксперт-аналитик, юрист в сфере IT и профессиональный синхронный переводчик. Твоя задача — обрабатывать входящие новости по темам: Искусственный Интеллект (AI), Кибербезопасность (Cybersecurity) и Финтех-право (FinTech Law), и готовить их для публикации в Telegram-канале.
+SYSTEM_PROMPT = """Роль: Ты — ведущий аналитик-эксперт в области искусственного интеллекта (ИИ), киберправа и финансовых технологий (FinTech). Твоя специализация — глубокая аналитика на базе открытых источников с академической точностью, свойственной преподавателю юридического университета.
 
-ТВОИ ГЛАВНЫЕ ПРАВИЛА (СТРОГО К ИСПОЛНЕНИЮ):
+Инструкция по обработке контента:
+1. Анализ: Если исходный текст короткий — сохрани его суть. Если текст длинный — профессионально сократи его, оставив только «мясо»: факты, юридические последствия и технологическую значимость.
+2. Тон: Пиши как человек-эксперт: строго, по делу, без воды и «синтетических» украшательств.
+3. Двуязычность: Каждая новость должна содержать полноценный блок на русском и профессиональный перевод на узбекский язык.
+4. Качество перевода: Перевод на узбекский (🇺🇿) должен быть эквивалентен по смыслу и качеству. Используй юридически выверенную терминологию (Sun'iy intellekt, Kiberhuquq, Moliyaviy texnologiyalar). Не сокращай узбекскую версию сильнее русской.
+5. Визуал и Ссылки: Всегда предполагай наличие изображения и первоисточника.
 
-1. Никакой синтетики и выдумок: Опирайся строго на предоставленный текст из открытого источника. Не придумывай факты.
-
-2. Полное раскрытие сути (Не сокращать!): Не делай коротких "выжимок". Ты должен до конца договаривать каждую новость. Раскрой:
-- Что именно произошло?
-- В чем техническая или юридическая суть?
-- Каковы последствия для рынка, закона или безопасности?
-
-3. Экспертный перевод (RU и UZ): Ты должен писать на двух языках. Перевод должен быть не дословным (машинным), а смысловым, сохраняя профессиональную IT- и юридическую терминологию.
-
-4. Паритет языков: Объем текста на узбекском языке (🇺🇿) должен быть абсолютно равен объему текста на русском (🇷🇺). Запрещено сокращать узбекскую версию. Передавай все детали, нюансы и объяснения на обоих языках в равной степени. Узбекский язык должен быть академически грамотным (используй термины: Sun'iy intellekt, Kiberxavfsizlik, Moliyaviy texnologiyalar).
-
-5. Без обрывов: Текст должен иметь логическое начало, развернутую основную часть и завершенную мысль в конце. Никаких оборванных фраз (очень важно!).
-
-СИСТЕМНЫЕ ПРАВИЛА ВЫВОДА (ДЛЯ ПИТОНА):
+СИСТЕМНЫЕ ПРАВИЛА ВЫВОДА (ДЛЯ ПИТОНА - JSON):
 - Вы должны возвращать JSON формата TranslatedArticle.
-- Поле 'headline_ru' - цепляющий, но профессиональный заголовок на РУССКОМ.
-- Поле 'headline_uz' - тот же заголовок на УЗБЕКСКОМ.
-- Поле 'analysis_ru' - полный, развернутый текст новости на русском языке. 2-4 глубоких абзаца. Раскрой всю суть.
-- Поле 'analysis_uz' - полный, развернутый перевод на узбекском языке. Такой же длинный, как и русский.
-- Поле 'hashtags' - 1-2 узких хештега по теме (например #RegTech #CyberLaw).
+- Поле 'headline_ru' - Заголовок RU.
+- Поле 'headline_uz' - Sarlavha UZ.
+- Поле 'analysis_ru' - Краткий, но глубокий аналитический текст на русском языке. Суть новости и её значение.
+- Поле 'analysis_uz' - Professional darajadagi o'zbek tilidagi tahliliy matn. Ma'no va mohiyat to'liq saqlangan.
+- Поле 'hashtags' - 1-2 узких хештега по теме (например #AI #CyberLaw #FinTech).
 - ВАЖНО: НИКАКИХ HTML ТЕГОВ (<b>, <br> и т.д.) внутри полей JSON. Абзацы разделяйте просто переносом строки (\\n).
-- Если текст не связан с ИТ/AI/Кибер/Финтех, верните emoji 🚫."""
+- Если текст совсем не связан с ИТ/AI/Кибер/Финтех, верните emoji 🚫 в поле 'headline_ru'."""
 
 # Keywords that MUST be present for RSS items (at least one) to pass pre-filter
 TECH_KEYWORDS = [
@@ -232,7 +223,7 @@ async def process_and_translate(text_content: str) -> dict:
         ru_header = f"{emoji} <b>{ru_header_ru}</b> | <b>{ru_header_uz}</b>"
         
         analysis_ru = (data.get('analysis_ru') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ru_text = f"{ru_header}\n\n🇷🇺 <b>Аналитика:</b>\n{analysis_ru}"
+        ru_text = f"{ru_header}\n\n🇷🇺 <b>Контекст:</b>\n{analysis_ru}"
         
         analysis_uz = (data.get('analysis_uz') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -487,19 +478,19 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
     # Check daily limit (max 10 per day)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != ''")
+    cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != '' AND link NOT LIKE 'manual_%'")
     count_today = cursor.fetchone()[0]
     conn.close()
     
-    if count_today >= 10:
-        logger.info("Daily limit of 10 articles reached. Skipping fetch.")
+    if count_today >= 30:
+        logger.info("Daily limit of 30 articles reached. Skipping fetch.")
         return
 
     news_items = await asyncio.to_thread(fetch_latest_news)
     processed_count: int = 0
 
     for item in news_items:
-        if processed_count >= 5:
+        if processed_count >= 1:
             break
             
         url = item['link']
@@ -535,7 +526,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         a_uz = translated.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         h_tags = translated.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         
-        text_ru = f"{ru_h}\n\n🇷🇺 <b>Аналитика:</b>\n{a_ru}"
+        text_ru = f"{ru_h}\n\n🇷🇺 <b>Контекст:</b>\n{a_ru}"
         text_uz = f"🇺🇿 <b>Tahlil:</b>\n{a_uz}\n\n🏷 {h_tags}"
         
         photo_url = item['photo_url']
@@ -552,7 +543,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         body = f"{text_ru}\n\n{text_uz}"
         footer = ""
         if not url.startswith("manual_"):
-            footer += f"\n\n🔗 Источник: {url}"
+            footer += f"\n\n🔗 Подробно / Batafsil: {url}"
         footer += "\n📢 @aileaderuz"
         
         # Safe truncation avoiding removing the footer links
@@ -732,7 +723,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 a_uz = data.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 h_tags = data.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 
-                new_ru = f"{ru_h}\n\n🇷🇺 <b>Аналитика:</b>\n{a_ru}"
+                new_ru = f"{ru_h}\n\n🇷🇺 <b>Контекст:</b>\n{a_ru}"
                 new_uz = f"🇺🇿 <b>Tahlil:</b>\n{a_uz}\n\n🏷 {h_tags}"
 
                 # Update DB
@@ -893,10 +884,10 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ Ошибка при сохранении.")
         return
         
-    body = f"{translated['uz']}\n\n➖➖➖\n\n{translated['ru']}"
+    body = f"{translated['ru']}\n\n➖➖➖\n\n{translated['uz']}"
     footer = ""
     if not link.startswith("manual_"):
-        footer += f"\n\n🔗 Источник: {link}"
+        footer += f"\n\n🔗 Подробно / Batafsil: {link}"
     footer += "\n📢 @aileaderuz"
     
     caption_combined = body + footer
@@ -971,7 +962,7 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             body = f"{text_ru}\n\n{text_uz}"
             footer = ""
             if not link.startswith("manual_"):
-                footer += f"\n\n🔗 Источник: {link}"
+                footer += f"\n\n🔗 Подробно / Batafsil: {link}"
             footer += "\n📢 @aileaderuz"
             
             pass # no truncation
@@ -1013,7 +1004,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
     job_queue = app.job_queue
-    job_queue.run_repeating(run_aggregator_job, interval=60, first=10)
+    job_queue.run_repeating(run_aggregator_job, interval=3600, first=10)
 
     logger.info("Bot is running V6 (Strict Formatting, Branding & Fast Delivery)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
