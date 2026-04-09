@@ -45,10 +45,10 @@ MODEL_ID = "gemini-2.5-flash-lite"
 
 class TranslatedArticle(BaseModel):
     emoji: str = Field(description="One tight, relevant emoji, e.g. ⚡️", default="⚡️")
-    headline_ru: str = Field(description="Catchy but professional headline in Russian", default="")
-    headline_uz: str = Field(description="Same headline in Uzbek", default="")
-    analysis_ru: str = Field(description="Full deep analysis text in Russian (2-4 paragraphs). Do NOT shorten.", default="")
-    analysis_uz: str = Field(description="Full deep analysis text in Uzbek (2-4 paragraphs). Must match Russian exactly.", default="")
+    headline_ru: str = Field(description="Catchy but professional headline in Russian, max 8 words", default="")
+    headline_uz: str = Field(description="Same headline in Uzbek, max 8 words", default="")
+    analysis_ru: str = Field(description="ONE punchy sentence in Russian that captures the essence and hooks the reader. Max 120 characters. No explanation — just the hook.", default="")
+    analysis_uz: str = Field(description="ONE punchy sentence in Uzbek that hooks the reader. Max 120 characters.", default="")
     hashtags: str = Field(description="1-2 narrow tags like #CyberLaw #AI", default="#TechNews #AI")
     image_prompt: str = Field(description="Short English prompt for AI image", default="digital technology artificial intelligence")
 
@@ -59,6 +59,30 @@ def strip_artificial_words(text: str) -> str:
     text = re.sub(r'\bВАЖНО:\s*', '', text)
     text = re.sub(r'\bMUHIM:\s*', '', text)
     return text
+
+def force_one_sentence(text: str, max_chars: int = 140) -> str:
+    """
+    HARD enforcement: always returns only the FIRST sentence.
+    No matter what the AI returns — we take exactly one sentence.
+    """
+    if not text:
+        return text
+    text = text.strip()
+    # Split on first sentence-ending punctuation followed by space or end
+    match = re.search(r'([.!?»\"\')])(\s|$)', text)
+    if match:
+        first = text[:match.start() + 1].strip()
+    else:
+        # No punctuation found — take everything up to max_chars
+        first = text
+    # Final hard char limit
+    if len(first) > max_chars:
+        # cut at last space within limit
+        cut = first[:max_chars].rsplit(' ', 1)[0].rstrip()
+        if cut and cut[-1] not in '.!?':
+            cut += '.'
+        first = cut
+    return first
 
 def truncate_to_sentence(text: str, limit: int) -> str:
     """
@@ -226,24 +250,27 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """Роль: Ты — ведущий аналитик-эксперт в области искусственного интеллекта (ИИ), киберправа и финансовых технологий (FinTech). Твоя специализация — глубокая аналитика на базе открытых источников, написанная живым, человеческим языком.
+SYSTEM_PROMPT = """Ты пишешь подписи для Telegram-канала о технологиях.
 
-Инструкция по обработке контента:
-1. Анализ: Если исходный текст короткий — сохрани его суть. Если текст длинный — профессионально сократи его, оставив только «мясо». МАКСИМАЛЬНАЯ ДЛИНА АНАЛИЗА ДЛЯ КАЖДОГО ЯЗЫКА — СТРОГО 300 СИМВОЛОВ. Это супер-критично, иначе текст не поместится под картинкой в Telegram.
-2. Тон: Пиши как живой человек-эксперт, естественно и по делу. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать слова-маркеры «Важно:», «Muhim:», «Итог:», «Вывод:» — это выглядит искусственно и роботизированно.
-3. Двуязычность: Каждая новость должна содержать полноценный блок на русском и профессиональный перевод на узбекский язык.
-4. Качество перевода: Перевод на узбекский (🇺🇿) должен быть эквивалентен по смыслу и качеству. Используй юридически выверенную терминологию (Sun'iy intellekt, Kiberhuquq, Moliyaviy texnologiyalar). Не сокращай узбекскую версию сильнее русской. ЗАПРЕЩЕНО писать слово «Muhim:» в узбекском тексте.
-5. Визуал и Ссылки: Всегда предполагай наличие изображения и первоисточника.
+ТВОЯ ЗАДАЧА: для каждой новости написать ровно ОДНО предложение — на русском (analysis_ru) и одно на узбекском (analysis_uz).
 
-СИСТЕМНЫЕ ПРАВИЛА ВЫВОДА (ДЛЯ ПИТОНА - JSON):
-- Вы должны возвращать JSON формата TranslatedArticle.
-- Поле 'headline_ru' - Заголовок RU.
-- Поле 'headline_uz' - Sarlavha UZ.
-- Поле 'analysis_ru' - Краткий, но глубокий аналитический текст на русском языке. Суть новости и её значение. БЕЗ слов «Важно:» или «Итог:».
-- Поле 'analysis_uz' - Professional darajadagi o'zbek tilidagi tahliliy matn. Ma'no va mohiyat to'liq saqlangan. «Muhim:» so'zini ISHLATMANG.
-- Поле 'hashtags' - 1-2 узких хештега по теме (например #AI #CyberLaw #FinTech).
-- НИКАКИХ HTML ТЕГОВ (<b>, <br> и т.д.) внутри полей JSON. Абзацы разделяйте просто переносом строки (\\n).
-- ТЕМАТИКА: ЛЮБОЙ контент об ИТ-мероприятиях, конференциях, выставках (GITEX, Web Summit, CES, и т.д.), продуктах, стартапах, регуляциях в сфере ИИ/технологий — всегда релевантен. НИКОГДА не отказывайся от обработки контента, предоставленного админом. Поле emoji ДОЛЖНО быть релевантным эмодзи (⚡️🤖🔒💡🌐и т.д.), никогда не ставь 🚫."""
+УСЛОВИЯ:
+1. ОДНО предложение. Не два. Не три. Одно.
+2. Максимум 120 символов в каждом поле.
+3. Пиши факт + интрига. Читатель должен захотеть перейти по ссылке.
+4. Никаких вводных слов: «Важно:», «Как известно,», «Эксперты считают» — запрещено.
+
+ПРИМЕРЫ analysis_ru (копируй этот стиль):
+- «Т-Банк заменил оператора ИИ-агентом — и тот проработал год без единого выходного.»
+- «OpenAI выпустила модель, пишущую код лучше 90% программистов.»
+- «Tesla отзывает 2 млн машин из-за бага в автопилоте.»
+- «Узбекистан первым в СНГ принял закон об ИИ — и это меняет рынок.»
+
+ПРИМЕРЫ analysis_uz (то же, на узбекском):
+- «T-Bank AI agentni operatorga almashtirdi — u bir yil dam olmasdan ishladi.»
+- «OpenAI dasturchilarning 90% dan yaxshiroq kod yozadigan model chiqardi.»
+
+ОТВЕЧАЙ СТРОГО JSON. Никаких HTML тегов внутри полей."""
 
 # Keywords that MUST be present for RSS items (at least one) to pass pre-filter
 TECH_KEYWORDS = [
@@ -307,37 +334,37 @@ async def resolve_photo(photo_url: str) -> object:
     return fallback if fallback else DEFAULT_IMAGE
 
 async def process_and_translate(text_content: str) -> dict:
-    prompt = f"{SYSTEM_PROMPT}\n\nText to process:\n{text_content}"
-    
+    # Limit input to avoid huge prompts
+    input_text = text_content[:2500] if len(text_content) > 2500 else text_content
+
     def parse_gemini_json(response_text: str) -> dict:
         try:
             data = json.loads(response_text)
         except Exception:
-            # Fallback if somehow json parsing fails
             return {"error": f"JSON Decode Error: {response_text}"}
             
         emoji = data.get("emoji") or "⚡️"
-        # If Gemini returns 🚫 as emoji, replace with neutral tech emoji
-        # (manual posts should ALWAYS be processed — admin decides relevance)
         if emoji.strip() in ("🚫", "\U0001F6AB"):
             emoji = "⚡️"
 
         ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # Hard-limit each analysis to 350 visible chars, ending on a full sentence.
+        # HARD enforcement: force exactly ONE sentence, max 140 chars
         analysis_ru_raw = strip_artificial_words((data.get('analysis_ru') or '').strip())
         analysis_ru_raw = analysis_ru_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        analysis_ru_raw = truncate_to_sentence(analysis_ru_raw, 350)
+        analysis_ru_raw = force_one_sentence(analysis_ru_raw, max_chars=140)
 
         analysis_uz_raw = strip_artificial_words((data.get('analysis_uz') or '').strip())
         analysis_uz_raw = analysis_uz_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        analysis_uz_raw = truncate_to_sentence(analysis_uz_raw, 350)
+        analysis_uz_raw = force_one_sentence(analysis_uz_raw, max_chars=140)
 
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
+
+        logger.info(f"Final RU analysis ({len(analysis_ru_raw)} chars): {analysis_ru_raw}")
 
         return {
             "ru": ru_text,
@@ -347,10 +374,12 @@ async def process_and_translate(text_content: str) -> dict:
         }
 
     generator_config = types.GenerateContentConfig(
+        # system_instruction keeps the role separate from the news content
+        system_instruction=SYSTEM_PROMPT,
         response_mime_type="application/json",
         response_schema=TranslatedArticle,
-        temperature=0.3,
-        max_output_tokens=3000
+        temperature=0.65,       # slightly more creative = punchier hooks
+        max_output_tokens=300   # physically impossible to write a novel with 300 tokens
     )
 
     max_retries = 3
@@ -359,7 +388,7 @@ async def process_and_translate(text_content: str) -> dict:
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=MODEL_ID,
-                contents=prompt,
+                contents=input_text,   # just the raw article text, no prompt mixed in
                 config=generator_config
             )
             return parse_gemini_json(response.text)
@@ -635,12 +664,16 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
     channel_id = get_publish_channel()
     admin_id = get_admin_chat()
     
-    if not channel_id or not admin_id:
+    if not channel_id:
+        logger.warning("Aggregator: publish_channel not set — skipping run.")
+        return
+    if not admin_id:
+        logger.warning("Aggregator: admin_chat not set — skipping run.")
         return
 
     logger.info("Running aggregator job...")
     
-    # Check daily limit (max 10 per day)
+    # Check daily limit (max 30 per day)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != '' AND link NOT LIKE 'manual_%'")
@@ -652,10 +685,12 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     news_items = await asyncio.to_thread(fetch_latest_news)
+    logger.info(f"Fetched {len(news_items)} raw news items from all sources.")
     processed_count: int = 0
+    MAX_PER_RUN = 3  # process up to 3 new articles per hourly run
 
     for item in news_items:
-        if processed_count >= 1:
+        if processed_count >= MAX_PER_RUN:
             break
             
         url = item['link']
@@ -665,16 +700,24 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         # Pre-filter: skip obviously off-topic content before even calling Gemini
         if not is_tech_relevant(item['text']):
             logger.info(f"Skipping off-topic item (pre-filter): {url}")
-            # Still mark as processed so we don't keep re-checking it
-            save_article(url, "", "", "")
+            save_article(url, "", "", "")  # mark as processed so we skip next time
             continue
             
         logger.info(f"Processing new item: {url}")
         
+        # Enrich short RSS summaries by scraping the full article
+        article_text = item['text']
+        if len(article_text) < 300 and url.startswith("http"):
+            scraped = await fetch_article_text(url)
+            if scraped and len(scraped) > 100:
+                article_text = scraped
+                logger.info(f"Enriched RSS item with scraped text ({len(scraped)} chars): {url}")
+        
         # 1. Translate via Gemini
-        translated = await process_and_translate(item['text'])
+        translated = await process_and_translate(article_text)
         
         if not translated or "error" in translated:
+            logger.warning(f"Translation failed for {url}: {translated}")
             continue
 
         # Skip if Gemini flagged it as off-topic (title starts with 🚫)
@@ -685,15 +728,20 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             
         photo_url = item['photo_url']
         if not photo_url or photo_url == DEFAULT_IMAGE:
-            photo_url = get_thematic_image(translated.get('image_prompt', 'tech news'))
+            # Try to scrape og:image from the article page
+            scraped_img = await extract_og_image(url)
+            if scraped_img:
+                photo_url = scraped_img
+            else:
+                photo_url = get_thematic_image(translated.get('image_prompt', 'tech news'))
 
-        # 2. Save and get article ID (use pre-built, truncated texts)
+        # 2. Save and get article ID
         article_id = save_article(url, translated['uz'], translated['ru'], photo_url)
         if article_id == -1:
+            logger.warning(f"Duplicate or save error for {url}")
             continue
             
         # 3. Send preview to Admin for review
-        # translated['ru'] and translated['uz'] are already truncated + formatted
         body = f"{translated['ru']}\n\n➖➖➖\n\n{translated['uz']}"
         footer = ""
         if not url.startswith("manual_"):
@@ -714,8 +762,14 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         try:
             await send_article_media(context, admin_id, final_photo, media_type, combined_caption, keyboard)
             processed_count += 1
+            logger.info(f"Sent article {article_id} to admin for review. ({processed_count}/{MAX_PER_RUN})")
+            # Small delay between posts to avoid Telegram flood
+            if processed_count < MAX_PER_RUN:
+                await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"Failed to send to admin {admin_id}: {e}")
+    
+    logger.info(f"Aggregator run complete. Processed {processed_count} new articles.")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = (
@@ -961,15 +1015,23 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.error(f"Failed to fetch YouTube title via oEmbed: {e}")
 
     # For all other URLs: scrape the article text
+    # Detect if message is mostly just a URL (few words besides the URL)
+    text_without_urls = re.sub(r'https?://[^\s]+', '', str(text)).strip()
+    is_just_url = bool(urls_in_text) and len(text_without_urls) < 60
+
+    # Always extract source URL before potentially overwriting `text`
+    source_url_for_link = urls_in_text[0] if urls_in_text else ""
+
     if is_just_url and not extracted_yt_id and urls_in_text:
         target_url = urls_in_text[0]
         logger.info(f"Message is a bare URL, fetching article content from: {target_url}")
         scraped_text = await fetch_article_text(target_url)
         if scraped_text and len(scraped_text) > 80:
-            text = scraped_text + f"\nИсточник: {target_url}"
+            text = scraped_text
             logger.info(f"Enriched text with scraped article ({len(text)} chars)")
         else:
-            logger.warning(f"Could not scrape article text from {target_url}, using URL as-is")
+            logger.warning(f"Could not scrape article text from {target_url}, using URL as context")
+            text = f"Статья по ссылке: {target_url}"
 
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
@@ -980,7 +1042,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ Системная ошибка ИИ.\n\nТехническая деталь: <code>{err_str}</code>\n\n(Возможно, статья слишком короткая, либо это внутренняя ошибка Gemini API)", parse_mode="HTML")
         return
         
-    # --- Advanced link extraction for manual posts (do this FIRST) ---
+    # --- Advanced link extraction for manual posts ---
     link = ""
     # Support PTB 20+ forward_origin
     if getattr(update.message, 'forward_origin', None) and getattr(update.message.forward_origin, 'type', '') == 'channel':
@@ -996,11 +1058,15 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if chat and getattr(chat, 'username', None) and msg_id:
             link = f"https://t.me/{chat.username}/{msg_id}"
             
-    # Attempt Regex from text
+    # If we already know the source URL from the URL-only path, use it
+    if not link and source_url_for_link:
+        link = source_url_for_link
+
+    # Try URL regex on text as fallback
     if not link:
         urls = re.findall(r'(https?://[^\s]+)', str(text))
         if urls:
-            link = urls[-1] # Usually the source link is at the bottom
+            link = urls[-1]
             
     if not link:
         link = f"manual_{int(time.time())}"
@@ -1145,21 +1211,61 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         
                 await query.edit_message_caption(caption=f"❌ Ошибка публикации: {photo_err}", reply_markup=None)
 
+async def fetch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger the aggregator job (for testing and debugging)."""
+    admin_id = get_admin_chat()
+    if str(update.message.chat_id) != str(admin_id):
+        return
+    channel_id = get_publish_channel()
+    if not channel_id:
+        await update.message.reply_text("❌ Канал не установлен. Используйте /set_channel @channel")
+        return
+    await update.message.reply_text("⏳ Запускаю поиск новостей...")
+    try:
+        await run_aggregator_job(context)
+        await update.message.reply_text("✅ Готово! Если новостей нет — все уже обработаны или источники пусты.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current bot configuration."""
+    admin_id = get_admin_chat()
+    channel_id = get_publish_channel()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru != ''")
+    today_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM articles")
+    total_count = cursor.fetchone()[0]
+    conn.close()
+    status_text = (
+        f"📊 <b>Статус бота:</b>\n\n"
+        f"👤 Admin ID: <code>{admin_id or '❌ не задан'}</code>\n"
+        f"📢 Канал: <code>{channel_id or '❌ не задан'}</code>\n"
+        f"📰 Новостей сегодня: <b>{today_count}</b>\n"
+        f"📦 Всего в БД: <b>{total_count}</b>\n\n"
+        f"⏰ Автопоиск каждый час\n"
+        f"🔧 /fetch — запустить поиск сейчас"
+    )
+    await update.message.reply_text(status_text, parse_mode="HTML")
+
 def main() -> None:
     init_db()
-    
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("set_channel", set_channel_command))
     app.add_handler(CommandHandler("set_admin", set_admin_command))
+    app.add_handler(CommandHandler("fetch", fetch_command))
+    app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CallbackQueryHandler(publish_callback, pattern=r"^(pub|cancel|edit)\|.*"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
     job_queue = app.job_queue
-    job_queue.run_repeating(run_aggregator_job, interval=3600, first=10)
+    job_queue.run_repeating(run_aggregator_job, interval=3600, first=30)
 
-    logger.info("Bot is running V6 (Strict Formatting, Branding & Fast Delivery)...")
+    logger.info("Bot is running V7 (Hook style, /fetch, /status)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
