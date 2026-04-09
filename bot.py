@@ -64,16 +64,34 @@ def _visible_len(html_text: str) -> int:
 
 def safe_caption(text: str, limit: int = 1024) -> str:
     """
-    Ensures the caption never exceeds Telegram's limit.
-    Truncates at a word boundary on the stripped text, rebuilding the
-    result WITHOUT HTML tags so no tag is ever left open.
+    Ensures the caption never exceeds Telegram's visible-text limit.
+    The footer (🔗 link + 📢 branding) is ALWAYS kept intact.
+    Only the body text is truncated when needed.
     """
     if _visible_len(text) <= limit:
         return text
-    # Strip all HTML tags and hard-truncate the plain text
-    plain = _HTML_TAG_RE.sub('', text)
-    truncated = plain[:limit - 1].rsplit(' ', 1)[0] + '…'
-    return truncated
+
+    # Detect and protect the footer block (🔗…\n📢… at the end)
+    footer_match = re.search(r'(\n{1,2}🔗[^\n]*\n📢[^\n]*)\s*$', text)
+    if not footer_match:
+        footer_match = re.search(r'(\n{1,2}📢[^\n]*)\s*$', text)
+
+    if footer_match:
+        footer = footer_match.group(1)
+        body = text[:footer_match.start()]
+    else:
+        footer = ''
+        body = text
+
+    footer_vis = _visible_len(footer)
+    body_limit = limit - footer_vis
+
+    # Strip HTML from body and truncate at word boundary
+    body_plain = _HTML_TAG_RE.sub('', body)
+    if len(body_plain) > body_limit:
+        body_plain = body_plain[:body_limit - 1].rsplit(' ', 1)[0] + '…'
+
+    return body_plain + footer
 
 async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
     """Sends photo/video with caption. Caption is always within Telegram limit so photo+text stay together."""
@@ -236,16 +254,26 @@ async def process_and_translate(text_content: str) -> dict:
             return {"error": f"JSON Decode Error: {response_text}"}
             
         emoji = data.get("emoji") or "⚡️"
-        
+
         ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        
-        analysis_ru = strip_artificial_words((data.get('analysis_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru}"
-        
-        analysis_uz = strip_artificial_words((data.get('analysis_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        # Hard-limit each analysis to 350 visible chars so combined caption
+        # stays well within Telegram's 1024-char caption limit.
+        analysis_ru_raw = strip_artificial_words((data.get('analysis_ru') or '').strip())
+        analysis_ru_raw = analysis_ru_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if len(analysis_ru_raw) > 350:
+            analysis_ru_raw = analysis_ru_raw[:348].rsplit(' ', 1)[0] + '…'
+
+        analysis_uz_raw = strip_artificial_words((data.get('analysis_uz') or '').strip())
+        analysis_uz_raw = analysis_uz_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if len(analysis_uz_raw) > 350:
+            analysis_uz_raw = analysis_uz_raw[:348].rsplit(' ', 1)[0] + '…'
+
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz}\n\n🏷 {hashtags}"
+
+        ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
+        uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
 
         return {
             "ru": ru_text,
