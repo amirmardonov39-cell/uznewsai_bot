@@ -155,7 +155,7 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
 SYSTEM_PROMPT = """Роль: Ты — ведущий аналитик-эксперт в области искусственного интеллекта (ИИ), киберправа и финансовых технологий (FinTech). Твоя специализация — глубокая аналитика на базе открытых источников с академической точностью, свойственной преподавателю юридического университета.
 
 Инструкция по обработке контента:
-1. Анализ: Если исходный текст короткий — сохрани его суть. Если текст длинный — профессионально сократи его, оставив только «мясо». МАКСИМАЛЬНАЯ ДЛИНА АНАЛИЗА ДЛЯ КАЖДОГО ЯЗЫКА — СТРОГО 400 СИМВОЛОВ. Это критически важно, иначе текст не поместится под картинкой в Telegram.
+1. Анализ: Если исходный текст короткий — сохрани его суть. Если текст длинный — профессионально сократи его, оставив только «мясо». МАКСИМАЛЬНАЯ ДЛИНА АНАЛИЗА ДЛЯ КАЖДОГО ЯЗЫКА — СТРОГО 300 СИМВОЛОВ. Это супер-критично, иначе текст не поместится под картинкой в Telegram.
 2. Тон: Пиши как человек-эксперт: строго, по делу, без воды и «синтетических» украшательств.
 3. Двуязычность: Каждая новость должна содержать полноценный блок на русском и профессиональный перевод на узбекский язык.
 4. Качество перевода: Перевод на узбекский (🇺🇿) должен быть эквивалентен по смыслу и качеству. Используй юридически выверенную терминологию (Sun'iy intellekt, Kiberhuquq, Moliyaviy texnologiyalar). Не сокращай узбекскую версию сильнее русской.
@@ -226,7 +226,7 @@ async def process_and_translate(text_content: str) -> dict:
         
         analysis_uz = (data.get('analysis_uz') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        uz_text = f"🇺🇿 <b>{ru_header_uz}</b>\n\n{analysis_uz}\n\n🏷 {hashtags}"
+        uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz}\n\n🏷 {hashtags}"
 
         return {
             "ru": ru_text,
@@ -525,7 +525,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         h_tags = translated.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         
         text_ru = f"{emoji} <b>{ru_head_ru}</b>\n\n{a_ru}"
-        text_uz = f"🇺🇿 <b>{ru_head_uz}</b>\n\n{a_uz}\n\n🏷 {h_tags}"
+        text_uz = f"{emoji} <b>{ru_head_uz}</b>\n\n{a_uz}\n\n🏷 {h_tags}"
         
         photo_url = item['photo_url']
         
@@ -721,7 +721,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 h_tags = data.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 
                 new_ru = f"{emoji} <b>{ru_head_ru}</b>\n\n{a_ru}"
-                new_uz = f"🇺🇿 <b>{ru_head_uz}</b>\n\n{a_uz}\n\n🏷 {h_tags}"
+                new_uz = f"{emoji} <b>{ru_head_uz}</b>\n\n{a_uz}\n\n🏷 {h_tags}"
 
                 # Update DB
                 conn = sqlite3.connect(DB_PATH)
