@@ -580,52 +580,41 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             save_article(url, "", "", "")
             continue
             
-        emoji = translated.get("emoji", "⚡️")
-        ru_head_ru = translated.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ru_head_uz = translated.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        a_ru = translated.get("analysis_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        a_uz = translated.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        h_tags = translated.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        
-        text_ru = f"{emoji} <b>{ru_head_ru}</b>\n\n{a_ru}"
-        text_uz = f"{emoji} <b>{ru_head_uz}</b>\n\n{a_uz}\n\n🏷 {h_tags}"
-        
         photo_url = item['photo_url']
-        
         if not photo_url or photo_url == DEFAULT_IMAGE:
             photo_url = get_thematic_image(translated.get('image_prompt', 'tech news'))
-            
-        # 2. Save and get article ID
-        article_id = save_article(url, text_uz, text_ru, photo_url)
+
+        # 2. Save and get article ID (use pre-built, truncated texts)
+        article_id = save_article(url, translated['uz'], translated['ru'], photo_url)
         if article_id == -1:
             continue
             
         # 3. Send preview to Admin for review
-        body = f"{text_ru}\n\n{text_uz}"
+        # translated['ru'] and translated['uz'] are already truncated + formatted
+        body = f"{translated['ru']}\n\n➖➖➖\n\n{translated['uz']}"
         footer = ""
         if not url.startswith("manual_"):
             footer += f"\n\n🔗 Подробно / Batafsil: {url}"
         footer += "\n📢 @aileaderuz"
-        
-        # Safe truncation avoiding removing the footer links
-        pass # no truncation
+
         combined_caption = body + footer
-            
+
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
             [InlineKeyboardButton("✏️ Изменить", callback_data=f"edit|{article_id}")],
             [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel|{article_id}")]
         ])
-        
+
+        media_type = "photo"  # aggregator always fetches photos, not videos
         img_bytes = None
         if photo_url and photo_url.startswith("http"):
             img_bytes = await download_image(photo_url)
-        
-        final_photo = img_bytes if img_bytes else DEFAULT_IMAGE
-        
+
+        final_photo = img_bytes if img_bytes else (photo_url if photo_url and photo_url.startswith("http") else DEFAULT_IMAGE)
+
         try:
             await send_article_media(context, admin_id, final_photo, media_type, combined_caption, keyboard)
-            processed_count = processed_count + 1
+            processed_count += 1
         except Exception as e:
             logger.error(f"Failed to send to admin {admin_id}: {e}")
 
