@@ -243,7 +243,7 @@ SYSTEM_PROMPT = """Роль: Ты — ведущий аналитик-экспе
 - Поле 'analysis_uz' - Professional darajadagi o'zbek tilidagi tahliliy matn. Ma'no va mohiyat to'liq saqlangan. «Muhim:» so'zini ISHLATMANG.
 - Поле 'hashtags' - 1-2 узких хештега по теме (например #AI #CyberLaw #FinTech).
 - НИКАКИХ HTML ТЕГОВ (<b>, <br> и т.д.) внутри полей JSON. Абзацы разделяйте просто переносом строки (\\n).
-- Если текст совсем не связан с ИТ/AI/Кибер/Финтех, верните emoji 🚫 в поле 'headline_ru'."""
+- ТЕМАТИКА: ЛЮБОЙ контент об ИТ-мероприятиях, конференциях, выставках (GITEX, Web Summit, CES, и т.д.), продуктах, стартапах, регуляциях в сфере ИИ/технологий — всегда релевантен. НИКОГДА не отказывайся от обработки контента, предоставленного админом. Поле emoji ДОЛЖНО быть релевантным эмодзи (⚡️🤖🔒💡🌐и т.д.), никогда не ставь 🚫."""
 
 # Keywords that MUST be present for RSS items (at least one) to pass pre-filter
 TECH_KEYWORDS = [
@@ -257,7 +257,12 @@ TECH_KEYWORDS = [
     "программ", "кибербезопасность", "разработ", "цифров", "стартап",
     "openai", "chatgpt", "deepseek", "anthropic", "claude", "agi",
     "fintech", "invest", "venture", "innovation", "regulation", "policy",
-    "apple", "google", "microsoft", "meta", "nvidia", "tesla"
+    "apple", "google", "microsoft", "meta", "nvidia", "tesla",
+    # Tech events and conferences
+    "gitex", "conference", "summit", "forum", "expo", "exhibition", "конференц",
+    "ces", "web summit", "techcrunch", "выставка", "форум", "стартапы",
+    "hackathon", "хакатон", "incubator", "accelerator", "инноваци",
+    "it-park", "silicon", "hub", "цифровизац", "digital uzbekistan"
 ]
 
 def is_tech_relevant(text: str) -> bool:
@@ -291,6 +296,10 @@ async def process_and_translate(text_content: str) -> dict:
             return {"error": f"JSON Decode Error: {response_text}"}
             
         emoji = data.get("emoji") or "⚡️"
+        # If Gemini returns 🚫 as emoji, replace with neutral tech emoji
+        # (manual posts should ALWAYS be processed — admin decides relevance)
+        if emoji.strip() in ("🚫", "\U0001F6AB"):
+            emoji = "⚡️"
 
         ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
