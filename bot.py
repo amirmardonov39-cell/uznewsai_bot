@@ -272,24 +272,48 @@ SYSTEM_PROMPT = """Ты пишешь подписи для Telegram-канала
 
 ОТВЕЧАЙ СТРОГО JSON. Никаких HTML тегов внутри полей."""
 
-# Keywords that MUST be present for RSS items (at least one) to pass pre-filter
+# Keywords for pre-filter: AI, tech, fintech, law, grants, events
 TECH_KEYWORDS = [
+    # --- AI / ML ---
     "ai", "artificial intelligence", "machine learning", "deep learning",
-    "neural", "llm", "gpt", "tech", "software", "hardware", "startup",
-    "cybersecurity", "security", "hack", "programming", "developer",
-    "robot", "automation", "cloud", "data", "algorithm", "gpu", "chip",
-    "semiconductor", "open source", "api", "model", "benchmark",
-    "digital", "internet", "broadband", "5g", "quantum", "crypto",
-    "blockchain", "нейро", "искусственный интеллект", "технолог",
-    "программ", "кибербезопасность", "разработ", "цифров", "стартап",
-    "openai", "chatgpt", "deepseek", "anthropic", "claude", "agi",
-    "fintech", "invest", "venture", "innovation", "regulation", "policy",
+    "neural", "llm", "gpt", "agi", "openai", "chatgpt", "deepseek",
+    "anthropic", "claude", "gemini", "copilot", "mistral", "llama",
+    "нейро", "искусственный интеллект", "ии", "генеративн",
+    # --- Tech general ---
+    "tech", "software", "hardware", "startup", "robot", "automation",
+    "cloud", "data", "algorithm", "gpu", "chip", "semiconductor",
+    "open source", "api", "model", "benchmark", "programming", "developer",
+    "digital", "internet", "5g", "quantum", "cybersecurity", "hack",
+    "технолог", "программ", "кибербезопасность", "разработ", "цифров",
+    "стартап", "приложени", "платформ",
+    # --- Big Tech ---
     "apple", "google", "microsoft", "meta", "nvidia", "tesla",
-    # Tech events and conferences
-    "gitex", "conference", "summit", "forum", "expo", "exhibition", "конференц",
-    "ces", "web summit", "techcrunch", "выставка", "форум", "стартапы",
-    "hackathon", "хакатон", "incubator", "accelerator", "инноваци",
-    "it-park", "silicon", "hub", "цифровизац", "digital uzbekistan"
+    "amazon", "openai", "huawei", "samsung",
+    # --- Fintech / Crypto ---
+    "fintech", "blockchain", "crypto", "bitcoin", "ethereum",
+    "defi", "nft", "cbdc", "цифровой рубль", "цифровой сум",
+    "payment", "banking", "neobank", "invest", "venture", "ipo",
+    "финтех", "блокчейн", "криптовалют", "инвестиц",
+    # --- Legal / Regulation ---
+    "regulation", "policy", "law", "legal", "compliance", "gdpr",
+    "legislation", "court", "lawsuit", "fine", "ban", "privacy",
+    "закон", "право", "регулиров", "суд", "штраф", "юридич",
+    "персональные данные", "защита данных", "qonun", "huquq",
+    # --- Grants & Funding ---
+    "grant", "funding", "гранты", "грант", "финансиров",
+    "innovation fund", "инновационный фонд", "it-park",
+    "fellowship", "scholarship", "стипендия", "конкурс",
+    "accelerator", "incubator", "акселератор", "инкубатор",
+    "seed", "series a", "series b", "pre-seed",
+    # --- Events & Conferences ---
+    "conference", "summit", "forum", "expo", "exhibition", "hackathon",
+    "workshop", "webinar", "meetup", "gitex", "ces", "web summit",
+    "конференц", "выставка", "форум", "хакатон", "вебинар",
+    "мероприятие", "event", "techcrunch disrupt", "innovate",
+    # --- Uzbekistan / CIS specific ---
+    "uzbekistan", "узбекистан", "digital uzbekistan", "цифровизац",
+    "silicon", "hub", "it park", "astana hub", "skolkovo",
+    "ташкент", "tashkent", "самарканд", "samarkand",
 ]
 
 def is_tech_relevant(text: str) -> bool:
@@ -409,31 +433,61 @@ async def process_and_translate(text_content: str) -> dict:
 
 SOURCES = {
     "telegram": [
+        # --- Uzbekistan & CIS tech ---
         "https://t.me/s/uzbbenelux",
         "https://t.me/s/xor_journal",
         "https://t.me/s/droidergram",
-        "https://t.me/s/ai_machinelearning_big_data",
-        "https://t.me/s/deeplearning_ru",
         "https://t.me/s/digest_uz",
         "https://t.me/s/exploitex",
-        "https://t.me/s/pulatov_kh"
+        "https://t.me/s/pulatov_kh",
+        # --- AI / ML ---
+        "https://t.me/s/ai_machinelearning_big_data",
+        "https://t.me/s/deeplearning_ru",
+        "https://t.me/s/openai_ru",
+        "https://t.me/s/artificial_intelligence_vc",
+        # --- Fintech / Crypto ---
+        "https://t.me/s/forklog",
+        "https://t.me/s/fintech_ru",
+        # --- Law / Legal tech ---
+        "https://t.me/s/legaltech_news",
+        # --- Grants & Events ---
+        "https://t.me/s/itpark_uz",
+        "https://t.me/s/grants_and_scholarships",
     ],
     "rss": [
-        "https://habr.com/ru/rss/all/all/",
-        "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
-        "https://feeds.arstechnica.com/arstechnica/technology-lab",
-        "https://www.theverge.com/rss/index.xml",
+        # --- AI & Tech (global) ---
         "https://techcrunch.com/feed/",
         "https://venturebeat.com/feed/",
+        "https://www.artificialintelligence-news.com/feed/",
+        "https://www.marktechpost.com/feed/",
+        "https://www.technologyreview.com/feed/",
+        "https://www.theverge.com/rss/index.xml",
+        "https://feeds.arstechnica.com/arstechnica/technology-lab",
         "https://www.wired.com/feed/rss",
-        "https://exploit.media/feed/",
-        "https://forklog.com/feed/",
-        "https://hnrss.org/newest?q=AI",          # HackerNews AI filtered
-        "https://www.artificialintelligence-news.com/feed/", # AI News
-        "https://www.technologyreview.com/feed/", # MIT Tech Review
         "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",
-        "https://www.marktechpost.com/feed/",     # MarkTechPost (AI Research)
-        "https://cnet.com/rss/news/"
+        "https://hnrss.org/newest?q=AI+grant+OR+AI+funding",
+        "https://hnrss.org/newest?q=AI+law+OR+AI+regulation",
+        # --- AI Research ---
+        "https://huggingface.co/blog/feed.xml",
+        # --- Cyber & Security ---
+        "https://exploit.media/feed/",
+        # --- Fintech ---
+        "https://forklog.com/feed/",
+        "https://www.fintechfutures.com/feed/",
+        "https://www.pymnts.com/feed/",
+        # --- Legal & Regulation ---
+        "https://iapp.org/feed/",                       # Privacy & Data law
+        "https://www.legaltech.news/feed",              # Legaltech
+        "https://www.lawfaremedia.org/feed",            # Tech policy & law
+        # --- Grants & Innovation funding ---
+        "https://ec.europa.eu/newsroom/all-services-rss.cfm",  # EU grants
+        "https://hnrss.org/newest?q=startup+grant+OR+AI+grant",
+        # --- Russian/CIS tech ---
+        "https://habr.com/ru/rss/all/all/",
+        # --- Events ---
+        "https://hnrss.org/newest?q=AI+conference+OR+AI+summit+OR+AI+event",
+        "https://cnet.com/rss/news/",
+        "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
     ]
 }
 
@@ -687,7 +741,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
     news_items = await asyncio.to_thread(fetch_latest_news)
     logger.info(f"Fetched {len(news_items)} raw news items from all sources.")
     processed_count: int = 0
-    MAX_PER_RUN = 3  # process up to 3 new articles per hourly run
+    MAX_PER_RUN = 1  # exactly 1 new article per hour
 
     for item in news_items:
         if processed_count >= MAX_PER_RUN:
