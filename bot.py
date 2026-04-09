@@ -48,27 +48,46 @@ class TranslatedArticle(BaseModel):
     hashtags: str = Field(description="1-2 narrow tags like #CyberLaw #AI", default="#TechNews #AI")
     image_prompt: str = Field(description="Short English prompt for AI image", default="digital technology artificial intelligence")
 
+def strip_artificial_words(text: str) -> str:
+    """Remove artificial marker words like 'Важно:' and 'Muhim:' from text."""
+    text = re.sub(r'\bВажно:\s*', '', text)
+    text = re.sub(r'\bMuhim:\s*', '', text)
+    text = re.sub(r'\bВАЖНО:\s*', '', text)
+    text = re.sub(r'\bMUHIM:\s*', '', text)
+    return text
+
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+
+def _visible_len(html_text: str) -> int:
+    """Returns the number of visible characters (strips HTML tags)."""
+    return len(_HTML_TAG_RE.sub('', html_text))
+
+def safe_caption(text: str, limit: int = 1024) -> str:
+    """
+    Ensures the caption never exceeds Telegram's limit.
+    Truncates at a word boundary on the stripped text, rebuilding the
+    result WITHOUT HTML tags so no tag is ever left open.
+    """
+    if _visible_len(text) <= limit:
+        return text
+    # Strip all HTML tags and hard-truncate the plain text
+    plain = _HTML_TAG_RE.sub('', text)
+    truncated = plain[:limit - 1].rsplit(' ', 1)[0] + '…'
+    return truncated
+
 async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
-    """Sends photo or video. If caption > 1024 chars, sends text as a separate message."""
-    if len(caption_combined) <= 1024:
-        if media_type == "video" and isinstance(final_photo, str) and not final_photo.startswith("http"):
-            return await context.bot.send_video(chat_id=chat_id, video=final_photo, caption=caption_combined, reply_markup=keyboard, parse_mode="HTML")
-        else:
-            return await context.bot.send_photo(chat_id=chat_id, photo=final_photo, caption=caption_combined, reply_markup=keyboard, parse_mode="HTML")
+    """Sends photo/video with caption. Caption is always within Telegram limit so photo+text stay together."""
+    caption_safe = safe_caption(caption_combined)
+
+    if media_type == "video" and isinstance(final_photo, str) and not final_photo.startswith("http"):
+        return await context.bot.send_video(
+            chat_id=chat_id, video=final_photo,
+            caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
+        )
     else:
-        # Long text 1024+ bypass
-        if media_type == "video" and isinstance(final_photo, str) and not final_photo.startswith("http"):
-            msg = await context.bot.send_video(chat_id=chat_id, video=final_photo)
-        else:
-            msg = await context.bot.send_photo(chat_id=chat_id, photo=final_photo)
-            
-        return await context.bot.send_message(
-            chat_id=chat_id,
-            text=caption_combined,
-            reply_to_message_id=msg.message_id,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-            disable_web_page_preview=True
+        return await context.bot.send_photo(
+            chat_id=chat_id, photo=final_photo,
+            caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
         )
 
 def init_db():
@@ -152,23 +171,23 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """Роль: Ты — ведущий аналитик-эксперт в области искусственного интеллекта (ИИ), киберправа и финансовых технологий (FinTech). Твоя специализация — глубокая аналитика на базе открытых источников с академической точностью, свойственной преподавателю юридического университета.
+SYSTEM_PROMPT = """Роль: Ты — ведущий аналитик-эксперт в области искусственного интеллекта (ИИ), киберправа и финансовых технологий (FinTech). Твоя специализация — глубокая аналитика на базе открытых источников, написанная живым, человеческим языком.
 
 Инструкция по обработке контента:
 1. Анализ: Если исходный текст короткий — сохрани его суть. Если текст длинный — профессионально сократи его, оставив только «мясо». МАКСИМАЛЬНАЯ ДЛИНА АНАЛИЗА ДЛЯ КАЖДОГО ЯЗЫКА — СТРОГО 300 СИМВОЛОВ. Это супер-критично, иначе текст не поместится под картинкой в Telegram.
-2. Тон: Пиши как человек-эксперт: строго, по делу, без воды и «синтетических» украшательств.
+2. Тон: Пиши как живой человек-эксперт, естественно и по делу. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать слова-маркеры «Важно:», «Muhim:», «Итог:», «Вывод:» — это выглядит искусственно и роботизированно.
 3. Двуязычность: Каждая новость должна содержать полноценный блок на русском и профессиональный перевод на узбекский язык.
-4. Качество перевода: Перевод на узбекский (🇺🇿) должен быть эквивалентен по смыслу и качеству. Используй юридически выверенную терминологию (Sun'iy intellekt, Kiberhuquq, Moliyaviy texnologiyalar). Не сокращай узбекскую версию сильнее русской.
+4. Качество перевода: Перевод на узбекский (🇺🇿) должен быть эквивалентен по смыслу и качеству. Используй юридически выверенную терминологию (Sun'iy intellekt, Kiberhuquq, Moliyaviy texnologiyalar). Не сокращай узбекскую версию сильнее русской. ЗАПРЕЩЕНО писать слово «Muhim:» в узбекском тексте.
 5. Визуал и Ссылки: Всегда предполагай наличие изображения и первоисточника.
 
 СИСТЕМНЫЕ ПРАВИЛА ВЫВОДА (ДЛЯ ПИТОНА - JSON):
 - Вы должны возвращать JSON формата TranslatedArticle.
 - Поле 'headline_ru' - Заголовок RU.
 - Поле 'headline_uz' - Sarlavha UZ.
-- Поле 'analysis_ru' - Краткий, но глубокий аналитический текст на русском языке. Суть новости и её значение.
-- Поле 'analysis_uz' - Professional darajadagi o'zbek tilidagi tahliliy matn. Ma'no va mohiyat to'liq saqlangan.
+- Поле 'analysis_ru' - Краткий, но глубокий аналитический текст на русском языке. Суть новости и её значение. БЕЗ слов «Важно:» или «Итог:».
+- Поле 'analysis_uz' - Professional darajadagi o'zbek tilidagi tahliliy matn. Ma'no va mohiyat to'liq saqlangan. «Muhim:» so'zini ISHLATMANG.
 - Поле 'hashtags' - 1-2 узких хештега по теме (например #AI #CyberLaw #FinTech).
-- ВАЖНО: НИКАКИХ HTML ТЕГОВ (<b>, <br> и т.д.) внутри полей JSON. Абзацы разделяйте просто переносом строки (\\n).
+- НИКАКИХ HTML ТЕГОВ (<b>, <br> и т.д.) внутри полей JSON. Абзацы разделяйте просто переносом строки (\\n).
 - Если текст совсем не связан с ИТ/AI/Кибер/Финтех, верните emoji 🚫 в поле 'headline_ru'."""
 
 # Keywords that MUST be present for RSS items (at least one) to pass pre-filter
@@ -218,13 +237,13 @@ async def process_and_translate(text_content: str) -> dict:
             
         emoji = data.get("emoji") or "⚡️"
         
-        ru_header_ru = (data.get('headline_ru') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ru_header_uz = (data.get('headline_uz') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         
-        analysis_ru = (data.get('analysis_ru') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        analysis_ru = strip_artificial_words((data.get('analysis_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru}"
         
-        analysis_uz = (data.get('analysis_uz') or '').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        analysis_uz = strip_artificial_words((data.get('analysis_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz}\n\n🏷 {hashtags}"
 
