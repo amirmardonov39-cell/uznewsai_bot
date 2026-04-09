@@ -404,6 +404,61 @@ def extract_youtube_video_id(url: str) -> str:
             return match.group(1)
     return None
 
+async def fetch_article_text(url: str, timeout: int = 10) -> str:
+    """
+    Fetches a URL and extracts readable article text:
+    og:title + og:description + visible body paragraphs.
+    Returns empty string on failure.
+    """
+    if not url or not url.startswith("http"):
+        return ""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        async with httpx.AsyncClient(follow_redirects=True) as c:
+            resp = await c.get(url, headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            return ""
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        parts = []
+
+        # og:title / page title
+        og_title = soup.find("meta", property="og:title")
+        title_text = (og_title["content"] if og_title and og_title.get("content")
+                      else (soup.title.string if soup.title else ""))
+        if title_text:
+            parts.append(title_text.strip())
+
+        # og:description
+        og_desc = soup.find("meta", property="og:description")
+        if not og_desc:
+            og_desc = soup.find("meta", attrs={"name": "description"})
+        if og_desc and og_desc.get("content"):
+            parts.append(og_desc["content"].strip())
+
+        # Article body: prefer <article>, then common content selectors
+        article = soup.find("article")
+        if not article:
+            article = soup.find(attrs={"class": re.compile(r'(article|content|post|entry|story|text)', re.I)})
+        if article:
+            paragraphs = article.find_all(["p", "h2", "h3"])
+            body = " ".join(p.get_text(separator=" ", strip=True) for p in paragraphs)
+            if body:
+                parts.append(body[:2000])  # cap at 2000 chars to avoid huge prompts
+        elif not parts:
+            # Last resort: all visible paragraph text
+            paragraphs = soup.find_all("p")
+            body = " ".join(p.get_text(separator=" ", strip=True) for p in paragraphs[:20])
+            if body:
+                parts.append(body[:2000])
+
+        result = "\n".join(parts).strip()
+        logger.info(f"fetch_article_text extracted {len(result)} chars from {url}")
+        return result
+    except Exception as e:
+        logger.error(f"fetch_article_text error for {url}: {e}")
+        return ""
+
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE, payload: str):
     await update.message.reply_chat_action(action="typing")
     chat_prompt = f"""You are a helpful, professional AI Assistant running inside the @aileaderuz Telegram news bot. Your developer is Amir.
@@ -843,22 +898,38 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     logger.info("Replying with status message for News Post...")
-    await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
-    
-    # If it's just a YouTube link with no text, fetch the YouTube title to help the AI understand
+    await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...”)
+
+    # --- Enrich text: for short messages that are just a URL, fetch full article content ---
+    urls_in_text = re.findall(r'(https?://[^\s]+)', str(text))
+    is_just_url = len(str(text).strip()) < 200 and bool(urls_in_text)
+
+    # YouTube fast-path
     extracted_yt_id = extract_youtube_video_id(str(text))
-    if extracted_yt_id and len(str(text).split()) <= 2:
+    if extracted_yt_id:
         try:
             oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={extracted_yt_id}&format=json"
             resp = await asyncio.to_thread(requests.get, oembed_url, timeout=5)
             if resp.status_code == 200:
-                data = resp.json()
-                yt_title = data.get("title", "")
+                yt_data = resp.json()
+                yt_title = yt_data.get("title", "")
                 if yt_title:
                     logger.info(f"OEmbed YouTube title: {yt_title}")
                     text = f"Видео с YouTube: {yt_title}\nСсылка: {text}"
+                    is_just_url = False
         except Exception as e:
             logger.error(f"Failed to fetch YouTube title via oEmbed: {e}")
+
+    # For all other URLs: scrape the article text
+    if is_just_url and not extracted_yt_id and urls_in_text:
+        target_url = urls_in_text[0]
+        logger.info(f"Message is a bare URL, fetching article content from: {target_url}")
+        scraped_text = await fetch_article_text(target_url)
+        if scraped_text and len(scraped_text) > 80:
+            text = scraped_text + f"\nИсточник: {target_url}"
+            logger.info(f"Enriched text with scraped article ({len(text)} chars)")
+        else:
+            logger.warning(f"Could not scrape article text from {target_url}, using URL as-is")
 
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
