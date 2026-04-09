@@ -274,8 +274,9 @@ async def download_image(url: str, timeout: int = 30) -> bytes:
     if not url or not url.startswith("http"):
         return b""
     try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            resp = await client.get(url, timeout=timeout)
+            resp = await client.get(url, headers=headers, timeout=timeout)
             resp.raise_for_status()
             content = resp.content
             if len(content) < 1000:  # Too small = not a real image
@@ -284,6 +285,26 @@ async def download_image(url: str, timeout: int = 30) -> bytes:
     except Exception as e:
         logger.error(f"Failed to download image {url}: {e}")
         return b""
+
+async def resolve_photo(photo_url: str) -> object:
+    """
+    Returns a photo suitable for send_photo/send_video:
+    - If photo_url is a Telegram file_id (no http prefix) -> return as-is
+    - If photo_url is an HTTP URL -> download bytes ourselves (avoids Telegram
+      being blocked by origin servers) and return bytes
+    - On any failure -> return DEFAULT_IMAGE bytes
+    Never returns a raw http URL so Telegram never needs to fetch it itself.
+    """
+    if not photo_url:
+        return await download_image(DEFAULT_IMAGE) or DEFAULT_IMAGE
+    if not photo_url.startswith("http"):
+        return photo_url  # Telegram file_id
+    img_bytes = await download_image(photo_url)
+    if img_bytes:
+        return img_bytes
+    # Fallback: try default image
+    fallback = await download_image(DEFAULT_IMAGE)
+    return fallback if fallback else DEFAULT_IMAGE
 
 async def process_and_translate(text_content: str) -> dict:
     prompt = f"{SYSTEM_PROMPT}\n\nText to process:\n{text_content}"
@@ -688,11 +709,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         ])
 
         media_type = "photo"  # aggregator always fetches photos, not videos
-        img_bytes = None
-        if photo_url and photo_url.startswith("http"):
-            img_bytes = await download_image(photo_url)
-
-        final_photo = img_bytes if img_bytes else (photo_url if photo_url and photo_url.startswith("http") else DEFAULT_IMAGE)
+        final_photo = await resolve_photo(photo_url)
 
         try:
             await send_article_media(context, admin_id, final_photo, media_type, combined_caption, keyboard)
@@ -881,11 +898,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel|{article_id}")]
                 ])
                 
-                img_bytes = None
-                if photo_url and photo_url.startswith("http"):
-                    img_bytes = await download_image(photo_url)
-                
-                final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
+                final_photo = await resolve_photo(photo_url)
                 await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_ru, keyboard)
                 break
             except Exception as e:
@@ -1045,15 +1058,8 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel|{article_id}")]
     ])
     
-    img_bytes = None
-    if photo_url and photo_url.startswith("http"):
-        try:
-            img_bytes = await download_image(photo_url)
-        except Exception as e:
-            logger.error(f"Image download failed: {e}")
-    
     try:
-        final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
+        final_photo = await resolve_photo(photo_url)
         await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_combined, keyboard)
     except Exception as photo_err:
         if "Can't use file of type" in str(photo_err) and photo_url and not photo_url.startswith("http"):
