@@ -30,6 +30,10 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DB_PATH = os.getenv("DB_PATH", "bot_database.sqlite")
+# These can be pre-set via Railway environment variables so the bot works
+# immediately after deploy without needing /set_admin and /set_channel
+ENV_ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
+ENV_PUBLISH_CHANNEL = os.getenv("PUBLISH_CHANNEL", "").strip()
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     logger.error("Missing TELEGRAM_TOKEN or GEMINI_API_KEY.")
@@ -151,7 +155,21 @@ def init_db():
         cursor.execute("ALTER TABLE articles ADD COLUMN media_type TEXT DEFAULT 'photo'")
     except sqlite3.OperationalError:
         pass
-        
+
+    # Seed config from environment variables (Railway ephemeral filesystem fix)
+    if ENV_ADMIN_CHAT_ID:
+        cursor.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('admin_chat', ?)",
+            (ENV_ADMIN_CHAT_ID,)
+        )
+        logger.info(f"DB seeded admin_chat from env: {ENV_ADMIN_CHAT_ID}")
+    if ENV_PUBLISH_CHANNEL:
+        cursor.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('publish_channel', ?)",
+            (ENV_PUBLISH_CHANNEL,)
+        )
+        logger.info(f"DB seeded publish_channel from env: {ENV_PUBLISH_CHANNEL}")
+
     conn.commit()
     conn.close()
 
@@ -898,7 +916,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     logger.info("Replying with status message for News Post...")
-    await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...”)
+    await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
 
     # --- Enrich text: for short messages that are just a URL, fetch full article content ---
     urls_in_text = re.findall(r'(https?://[^\s]+)', str(text))
