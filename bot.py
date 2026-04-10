@@ -377,8 +377,60 @@ TECH_KEYWORDS = [
     "ташкент", "tashkent", "самарканд", "samarkand",
 ]
 
+# Keywords that signal PURE political/military/geopolitical news (no tech angle)
+POLITICAL_NOISE_KEYWORDS = [
+    # Military & war
+    "fighter jet", "warplane", "airstrike", "missile strike", "bomb", "troops",
+    "military escort", "armed forces", "air force", "navy", "battalion",
+    "истребител", "ракетн", "бомбардир", "военн", "армия", "войска",
+    "авиаудар", "воздушный удар", "обстрел", "артиллер",
+    # Pure geopolitics (people/countries clashing, no tech)
+    "delegation escort", "protect delegation", "shoot down", "ceasefire",
+    "peace talks", "sanctions against", "expelled diplomat", "ambassador",
+    "мирные переговоры", "посол", "дипломат", "делегацию от",
+    "прикрыл", "перехватил самолёт", "сопроводил самолёт",
+    # Elections & domestic politics
+    "election", "vote", "ballot", "parliament", "senator", "congress",
+    "president signed", "prime minister met", "summit meeting",
+    "выборы", "голосование", "парламент", "сенат", "президент встретил",
+    # Conflicts & terrorism (without cyber angle)
+    "terrorist attack", "explosion", "bombing", "hostage", "siege",
+    "теракт", "взрыв", "захват заложников", "осада",
+]
+
+# Tech/law/finance keywords that RESCUE a political-looking article
+# e.g. "AI regulation", "crypto ban", "cybersecurity law"
+TECH_RESCUE_KEYWORDS = [
+    "ai regulation", "tech regulation", "digital law", "cyber", "ai law",
+    "data protection", "digital currency", "fintech", "blockchain",
+    "startup", "silicon", "software", "hardware", "artificial intelligence",
+    "machine learning", "data breach", "encryption", "quantum",
+    "regulation of ai", "ai policy", "tech policy", "digital economy",
+    "цифров", "искусственный интеллект", "кибер", "регулирование ии",
+    "финтех", "блокчейн", "шифрован", "утечка данных",
+]
+
+def is_political_noise(text: str) -> bool:
+    """
+    Returns True if the text is pure political/military noise with no tech angle.
+    Logic: has political keywords AND lacks any tech-rescue terms.
+    """
+    text_lower = text.lower()
+    has_political = any(kw in text_lower for kw in POLITICAL_NOISE_KEYWORDS)
+    if not has_political:
+        return False
+    # Even if political, allow through if there's a tech/law/finance angle
+    has_tech_rescue = any(kw in text_lower for kw in TECH_RESCUE_KEYWORDS)
+    return not has_tech_rescue
+
 def is_tech_relevant(text: str) -> bool:
-    """Simple keyword pre-filter: returns True if the text looks tech-related."""
+    """
+    Two-stage filter:
+    1. Reject pure political/military noise (even if it contains generic words like 'law', 'policy')
+    2. Accept only content with tech/law/finance keywords
+    """
+    if is_political_noise(text):
+        return False
     text_lower = text.lower()
     return any(kw in text_lower for kw in TECH_KEYWORDS)
 
