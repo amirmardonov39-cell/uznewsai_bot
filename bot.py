@@ -809,59 +809,44 @@ User says: {payload}"""
                 return
 
 def fetch_latest_news():
-    news_items = []
-    
-    # 1. Telegram Web Previews
+    """
+    Collect news from ALL sources and interleave them for maximum diversity.
+    Sources: Telegram channels + RSS feeds (sorted by date).
+    Returns a mixed list so consecutive items come from different sources.
+    """
+    # --- 1. Telegram Web Previews ---
+    tg_buckets = []   # list of lists, one list per channel
     for tg_url in SOURCES["telegram"]:
         try:
             resp = requests.get(tg_url, timeout=10)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                messages = soup.find_all('div', class_='tgme_widget_message')
-                for msg in messages[-5:]:
-                    text_div = msg.find('div', class_='tgme_widget_message_text')
-                    date_a = msg.find('a', class_='tgme_widget_message_date')
-                    
-                    if not text_div or not date_a:
-                        continue
-                        
-                    text = text_div.get_text(separator='\n', strip=True)
-                    link = date_a.get('href')
-                    
-                    # Try fetching image from photo preview
-                    photo_url = DEFAULT_IMAGE
-                    photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
-                    if photo_wrap and 'style' in photo_wrap.attrs:
-                        style = photo_wrap['style']
-                        if "background-image:url('" in style:
-                            s = style.find("background-image:url('") + 22
-                            e = style.find("')", s)
-                            extracted = style[s:e]
-                            if extracted:
-                                photo_url = extracted
-                                
-                    # Try fetching image from video thumbnail if no photo
-                    if photo_url == DEFAULT_IMAGE:
-                        video_wrap = msg.find('i', class_='tgme_widget_message_video_thumb')
-                        if video_wrap and 'style' in video_wrap.attrs:
-                            style = video_wrap['style']
-                            if "background-image:url('" in style:
-                                s = style.find("background-image:url('") + 22
-                                e = style.find("')", s)
-                                extracted = style[s:e]
-                                if extracted:
-                                    photo_url = extracted
-                    
-                    if text and link:
-                        news_items.append({"text": text, "link": link, "photo_url": photo_url, "published": 0})
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            messages = soup.find_all('div', class_='tgme_widget_message')
+            bucket = []
+            for msg in messages[-5:]:
+                text_div = msg.find('div', class_='tgme_widget_message_text')
+                date_a = msg.find('a', class_='tgme_widget_message_date')
+                if not text_div or not date_a:
+                    continue
+                text = text_div.get_text(separator='\n', strip=True)
+                link = date_a.get('href')
+                if text and link:
+                    # DON'T use Telegram channel photos: they're often unrelated
+                    # (e.g. Navruz flowers photo attached to a tech article).
+                    # We'll scrape og:image from the real article URL instead.
+                    bucket.append({"text": text, "link": link, "photo_url": None, "published": 0, "source": "telegram"})
+            if bucket:
+                tg_buckets.append(bucket)
         except Exception as e:
             logger.error(f"Error scraping Telegram channel {tg_url}: {e}")
 
-    # 2. RSS Feeds — collect and sort by publish date (newest first)
-    rss_items = []
+    # --- 2. RSS Feeds ---
+    rss_buckets = []  # one list per feed
     for rss_url in SOURCES["rss"]:
         try:
             feed = feedparser.parse(rss_url)
+            bucket = []
             for entry in feed.entries[:5]:
                 link = getattr(entry, 'link', '')
                 if not link:
@@ -869,13 +854,12 @@ def fetch_latest_news():
                 title = getattr(entry, 'title', '')
                 summary_html = getattr(entry, 'summary', '') if hasattr(entry, 'summary') else ''
                 text_content = BeautifulSoup(summary_html, "html.parser").get_text(separator=' ', strip=True)
-                # Prepend title so we always have something even if summary is empty
                 if title and title not in text_content:
                     text_content = f"{title}. {text_content}".strip()
                 if not text_content:
                     text_content = title
 
-                # Publish time for sorting (epoch seconds; 0 = unknown)
+                # Publish time for date-sorting
                 pub_ts = 0
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                     try:
@@ -884,33 +868,45 @@ def fetch_latest_news():
                     except Exception:
                         pass
 
-                photo_url = DEFAULT_IMAGE
+                # Try to get an image hint from RSS metadata
+                photo_url = None
                 if hasattr(entry, 'media_content') and len(entry.media_content) > 0:
-                    photo_url = entry.media_content[0].get('url', DEFAULT_IMAGE)
-                if photo_url == DEFAULT_IMAGE and summary_html:
-                    summary_soup = BeautifulSoup(summary_html, "html.parser")
-                    img = summary_soup.find('img')
+                    photo_url = entry.media_content[0].get('url') or None
+                if not photo_url and summary_html:
+                    img = BeautifulSoup(summary_html, "html.parser").find('img')
                     if img and img.get('src'):
                         photo_url = img['src']
-                if photo_url == DEFAULT_IMAGE and hasattr(entry, 'content'):
-                    for content in entry.content:
-                        if content.value:
-                            content_soup = BeautifulSoup(content.value, "html.parser")
-                            img = content_soup.find('img')
+                if not photo_url and hasattr(entry, 'content'):
+                    for c in entry.content:
+                        if c.value:
+                            img = BeautifulSoup(c.value, "html.parser").find('img')
                             if img and img.get('src'):
                                 photo_url = img['src']
                                 break
 
                 if link and text_content:
-                    rss_items.append({"text": text_content, "link": link, "photo_url": photo_url, "published": pub_ts})
+                    bucket.append({"text": text_content, "link": link, "photo_url": photo_url, "published": pub_ts, "source": "rss"})
+            if bucket:
+                # Sort bucket by freshness
+                bucket.sort(key=lambda x: x["published"], reverse=True)
+                rss_buckets.append(bucket)
         except Exception as e:
             logger.error(f"Error scraping RSS {rss_url}: {e}")
 
-    # Sort RSS by publish date descending (freshest first)
-    rss_items.sort(key=lambda x: x["published"], reverse=True)
-    news_items.extend(rss_items)
+    # --- 3. Interleave all buckets (round-robin) for maximum source diversity ---
+    # Each round picks 1 item from the next available bucket.
+    # This ensures we never get 5 items from @uzbbenelux before seeing TechCrunch.
+    all_buckets = tg_buckets + rss_buckets
+    random.shuffle(all_buckets)   # randomize which source comes first each run
+    news_items = []
+    while any(all_buckets):
+        for bucket in list(all_buckets):
+            if bucket:
+                news_items.append(bucket.pop(0))
+            else:
+                all_buckets.remove(bucket)
 
-    logger.info(f"Total raw items collected: {len(news_items)} (TG + RSS)")
+    logger.info(f"Total raw items: {len(news_items)} from {len(tg_buckets)} TG channels + {len(rss_buckets)} RSS feeds")
     return news_items
 
 async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
@@ -986,14 +982,28 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             save_article(url, "", "", "")
             continue
             
-        photo_url = item['photo_url']
-        if not photo_url or photo_url == DEFAULT_IMAGE:
-            # Try to scrape og:image from the article page
+        # --- Photo selection: always prioritise article's own og:image ---
+        # We NEVER trust the photo from a Telegram channel post (could be unrelated).
+        # Priority: 1) og:image scraped from article URL
+        #           2) RSS media_content hint (if it came from RSS)
+        #           3) AI-generated image based on Gemini's image_prompt
+        photo_url = None
+
+        # Step 1: scrape og:image from the real article URL
+        if url.startswith("http"):
             scraped_img = await extract_og_image(url)
             if scraped_img:
                 photo_url = scraped_img
-            else:
-                photo_url = get_thematic_image(translated.get('image_prompt', 'tech news'))
+                logger.info(f"Using og:image for article: {scraped_img[:60]}")
+
+        # Step 2: use RSS hint only if og:image failed AND it came from RSS
+        if not photo_url and item.get('source') == 'rss' and item.get('photo_url'):
+            photo_url = item['photo_url']
+
+        # Step 3: AI-generated image (always topical via image_prompt from Gemini)
+        if not photo_url:
+            photo_url = get_thematic_image(translated.get('image_prompt', 'technology artificial intelligence news'))
+            logger.info(f"Using AI-generated image for article: {url}")
 
         # 2. Save and get article ID
         title_fingerprint = normalize_title(translated.get('title_ru', '') or raw_title)
