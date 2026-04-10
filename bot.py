@@ -164,36 +164,26 @@ async def send_article_media(context, chat_id, final_photo, media_type, caption_
             text=caption_safe,
             reply_markup=keyboard,
             parse_mode="HTML",
-            disable_web_page_preview=True,  # ← KEY FIX: prevents 'Wrong type of web page content'
+            disable_web_page_preview=True,
         )
 
-    # Step 1: Try primary photo (skip if None/empty)
-    if final_photo:
-        try:
-            result = await _send_photo(final_photo)
-            if result:
-                return result
-        except Exception as e1:
-            logger.warning(f"Primary photo failed ({e1}), trying AI fallback...")
+    # If no photo provided, go straight to text-only
+    if not final_photo:
+        return await _send_text_only()
 
-    # Step 2: Try AI-generated fallback image
+    # Step 1: Try primary photo
     try:
-        ai_img_bytes = await download_image(
-            "https://image.pollinations.ai/prompt/technology+news+digital?width=800&height=450&nologo=true",
-            min_size=1000  # AI images can be smaller than article images
-        )
-        if ai_img_bytes:
-            result = await _send_photo(ai_img_bytes)
-            if result:
-                return result
-    except Exception as e2:
-        logger.warning(f"AI fallback image failed ({e2}), sending text-only...")
+        result = await _send_photo(final_photo)
+        if result:
+            return result
+    except Exception as e1:
+        logger.warning(f"Primary photo failed ({e1}), sending text-only...")
 
-    # Step 3: Text-only — always succeeds
+    # Step 2: Text-only fallback
     try:
         return await _send_text_only()
-    except Exception as e3:
-        logger.error(f"Even text-only message failed: {e3}")
+    except Exception as e2:
+        logger.error(f"Even text-only message failed: {e2}")
         raise
 
 def init_db():
@@ -489,32 +479,21 @@ async def download_image(url: str, timeout: int = 20, min_size: int = 5000) -> b
 async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news digital") -> object:
     """
     Download and validate a photo for Telegram.
-    Returns: bytes (valid image) | Telegram file_id str | None (send text-only)
-    NEVER returns a raw http URL — Telegram must never fetch URLs itself.
+    Returns: bytes (valid image) | Telegram file_id str | None (no image — send text-only)
+    NEVER uses AI-generated images. NEVER returns a raw http URL.
     """
-    if photo_url and not photo_url.startswith("http"):
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith("http"):
         return photo_url  # Telegram file_id — valid as-is
 
-    if photo_url and photo_url.startswith("http"):
-        img_bytes = await download_image(photo_url)
-        if img_bytes:
-            return img_bytes
-        logger.info(f"Primary image rejected/failed: {photo_url}")
+    # Download and validate the real image
+    img_bytes = await download_image(photo_url)
+    if img_bytes:
+        return img_bytes
 
-    # Fallback 1: AI-generated thematic image
-    safe_prompt = urllib.parse.quote(fallback_prompt.strip())
-    ai_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=450&nologo=true"
-    ai_bytes = await download_image(ai_url, timeout=25, min_size=1000)
-    if ai_bytes:
-        return ai_bytes
-
-    # Fallback 2: hardcoded known-good default
-    fallback_bytes = await download_image(DEFAULT_IMAGE, timeout=25)
-    if fallback_bytes:
-        return fallback_bytes
-
-    # All failed — return None, send_article_media will use text-only
-    logger.warning("All image sources failed, will send text-only post.")
+    logger.warning(f"Image download failed or rejected: {photo_url} — will send text-only")
     return None
 
 async def process_and_translate(text_content: str) -> dict:
@@ -982,28 +961,17 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             save_article(url, "", "", "")
             continue
             
-        # --- Photo selection: always prioritise article's own og:image ---
-        # We NEVER trust the photo from a Telegram channel post (could be unrelated).
-        # Priority: 1) og:image scraped from article URL
-        #           2) RSS media_content hint (if it came from RSS)
-        #           3) AI-generated image based on Gemini's image_prompt
+        # --- Photo: only use the real og:image from the article source ---
+        # If no photo found → send without image (never use AI-generated art).
         photo_url = None
 
-        # Step 1: scrape og:image from the real article URL
         if url.startswith("http"):
             scraped_img = await extract_og_image(url)
             if scraped_img:
                 photo_url = scraped_img
-                logger.info(f"Using og:image for article: {scraped_img[:60]}")
-
-        # Step 2: use RSS hint only if og:image failed AND it came from RSS
-        if not photo_url and item.get('source') == 'rss' and item.get('photo_url'):
-            photo_url = item['photo_url']
-
-        # Step 3: AI-generated image (always topical via image_prompt from Gemini)
-        if not photo_url:
-            photo_url = get_thematic_image(translated.get('image_prompt', 'technology artificial intelligence news'))
-            logger.info(f"Using AI-generated image for article: {url}")
+                logger.info(f"Using og:image: {scraped_img[:60]}")
+            else:
+                logger.info(f"No og:image found for {url} — will post text-only")
 
         # 2. Save and get article ID
         title_fingerprint = normalize_title(translated.get('title_ru', '') or raw_title)
