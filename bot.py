@@ -141,19 +141,47 @@ def safe_caption(text: str, limit: int = 1024) -> str:
     return body_plain + footer
 
 async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
-    """Sends photo/video with caption. Caption is always within Telegram limit so photo+text stay together."""
+    """Sends photo/video with caption. Falls back to text-only if photo fails."""
     caption_safe = safe_caption(caption_combined)
 
-    if media_type == "video" and isinstance(final_photo, str) and not final_photo.startswith("http"):
-        return await context.bot.send_video(
-            chat_id=chat_id, video=final_photo,
-            caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
-        )
-    else:
+    async def _send_photo(photo):
+        if media_type == "video" and isinstance(photo, str) and not photo.startswith("http"):
+            return await context.bot.send_video(
+                chat_id=chat_id, video=photo,
+                caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
+            )
         return await context.bot.send_photo(
-            chat_id=chat_id, photo=final_photo,
+            chat_id=chat_id, photo=photo,
             caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
         )
+
+    # Try primary photo
+    try:
+        return await _send_photo(final_photo)
+    except Exception as e1:
+        logger.warning(f"Primary photo failed ({e1}), trying AI fallback image...")
+
+    # Fallback: try a Pollinations AI-generated image
+    try:
+        ai_img_bytes = await download_image(
+            f"https://image.pollinations.ai/prompt/technology+news+digital?width=800&height=450&nologo=true"
+        )
+        if ai_img_bytes:
+            return await _send_photo(ai_img_bytes)
+    except Exception as e2:
+        logger.warning(f"AI fallback image also failed ({e2}), sending text-only...")
+
+    # Last resort: text-only message (no photo)
+    try:
+        return await context.bot.send_message(
+            chat_id=chat_id,
+            text=caption_safe,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+    except Exception as e3:
+        logger.error(f"Even text-only message failed: {e3}")
+        raise
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -354,41 +382,72 @@ def is_tech_relevant(text: str) -> bool:
     text_lower = text.lower()
     return any(kw in text_lower for kw in TECH_KEYWORDS)
 
-async def download_image(url: str, timeout: int = 30) -> bytes:
+# Telegram accepts only these image formats
+_ACCEPTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+async def download_image(url: str, timeout: int = 20) -> bytes:
+    """Downloads an image, validates it's a raster format Telegram accepts. Returns b'' on failure."""
     if not url or not url.startswith("http"):
         return b""
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers, timeout=timeout)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "image/jpeg,image/png,image/webp,image/gif,image/*",
+        }
+        async with httpx.AsyncClient(follow_redirects=True) as c:
+            resp = await c.get(url, headers=headers, timeout=timeout)
             resp.raise_for_status()
+
+            # Validate content type — reject SVG, HTML, PDF, etc.
+            content_type = resp.headers.get("content-type", "").lower().split(";")[0].strip()
+            if content_type and content_type not in _ACCEPTED_IMAGE_TYPES:
+                logger.warning(f"Rejected image (bad Content-Type '{content_type}'): {url}")
+                return b""
+
             content = resp.content
-            if len(content) < 1000:  # Too small = not a real image
-                raise ValueError(f"Image too small ({len(content)} bytes), likely an error page")
+            # Too small = error page or icon, not a real article image
+            if len(content) < 5000:
+                logger.warning(f"Rejected image (too small {len(content)} bytes): {url}")
+                return b""
+
+            # Quick magic-byte check: reject SVG/HTML that bypass Content-Type
+            head = content[:16].lstrip()
+            if head.startswith(b"<"):
+                logger.warning(f"Rejected image (looks like HTML/SVG): {url}")
+                return b""
+
             return content
     except Exception as e:
         logger.error(f"Failed to download image {url}: {e}")
         return b""
 
-async def resolve_photo(photo_url: str) -> object:
+async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news digital") -> object:
     """
-    Returns a photo suitable for send_photo/send_video:
-    - If photo_url is a Telegram file_id (no http prefix) -> return as-is
-    - If photo_url is an HTTP URL -> download bytes ourselves (avoids Telegram
-      being blocked by origin servers) and return bytes
-    - On any failure -> return DEFAULT_IMAGE bytes
-    Never returns a raw http URL so Telegram never needs to fetch it itself.
+    Download and validate a photo for Telegram:
+    1. Try the given URL
+    2. Try AI-generated image via Pollinations
+    3. Try the hardcoded DEFAULT_IMAGE
+    Always returns bytes or a Telegram file_id string.
     """
     if not photo_url:
-        return await download_image(DEFAULT_IMAGE) or DEFAULT_IMAGE
-    if not photo_url.startswith("http"):
-        return photo_url  # Telegram file_id
-    img_bytes = await download_image(photo_url)
-    if img_bytes:
-        return img_bytes
-    # Fallback: try default image
-    fallback = await download_image(DEFAULT_IMAGE)
-    return fallback if fallback else DEFAULT_IMAGE
+        pass  # skip to fallback chain
+    elif not photo_url.startswith("http"):
+        return photo_url  # Telegram file_id — use as-is
+    else:
+        img_bytes = await download_image(photo_url)
+        if img_bytes:
+            return img_bytes
+
+    # Fallback 1: AI-generated image
+    safe_prompt = urllib.parse.quote(fallback_prompt.strip())
+    ai_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=450&nologo=true"
+    ai_bytes = await download_image(ai_url, timeout=25)
+    if ai_bytes:
+        return ai_bytes
+
+    # Fallback 2: hardcoded default
+    fallback_bytes = await download_image(DEFAULT_IMAGE, timeout=25)
+    return fallback_bytes if fallback_bytes else DEFAULT_IMAGE
 
 async def process_and_translate(text_content: str) -> dict:
     # Limit input to avoid huge prompts
@@ -891,7 +950,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         ])
 
         media_type = "photo"  # aggregator always fetches photos, not videos
-        final_photo = await resolve_photo(photo_url)
+        final_photo = await resolve_photo(photo_url, fallback_prompt=translated.get('image_prompt', 'technology news digital'))
 
         try:
             await send_article_media(context, admin_id, final_photo, media_type, combined_caption, keyboard)
@@ -1086,7 +1145,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel|{article_id}")]
                 ])
                 
-                final_photo = await resolve_photo(photo_url)
+                final_photo = await resolve_photo(photo_url, fallback_prompt="technology artificial intelligence news")
                 await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_ru, keyboard)
                 break
             except Exception as e:
@@ -1259,20 +1318,11 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     ])
     
     try:
-        final_photo = await resolve_photo(photo_url)
+        final_photo = await resolve_photo(photo_url, fallback_prompt=translated.get('image_prompt', 'technology news digital'))
         await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_combined, keyboard)
     except Exception as photo_err:
-        if "Can't use file of type" in str(photo_err) and photo_url and not photo_url.startswith("http"):
-            try:
-                tg_file = await context.bot.get_file(photo_url)
-                downloaded_bytes = bytes(await tg_file.download_as_bytearray())
-                await send_article_media(context, update.message.chat_id, downloaded_bytes, media_type, caption_combined, keyboard)
-                return
-            except Exception as dl_err:
-                logger.error(f"Fallback download failed: {dl_err}")
-                
-        logger.error(f"Failed to send photo: {photo_err}")
-        await update.message.reply_text(f"❌ Ошибка отправки: {photo_err}")
+        logger.error(f"All photo fallbacks exhausted for manual post: {photo_err}")
+        await update.message.reply_text(f"❌ Не удалось доставить сообщение: {photo_err}")
 
 async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
