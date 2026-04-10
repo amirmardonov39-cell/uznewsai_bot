@@ -141,10 +141,12 @@ def safe_caption(text: str, limit: int = 1024) -> str:
     return body_plain + footer
 
 async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
-    """Sends photo/video with caption. Falls back to text-only if photo fails."""
+    """Sends photo/video with caption. Falls back to text-only if any photo step fails."""
     caption_safe = safe_caption(caption_combined)
 
     async def _send_photo(photo):
+        if not photo:  # None or empty bytes — don't even try
+            return None
         if media_type == "video" and isinstance(photo, str) and not photo.startswith("http"):
             return await context.bot.send_video(
                 chat_id=chat_id, video=photo,
@@ -155,30 +157,41 @@ async def send_article_media(context, chat_id, final_photo, media_type, caption_
             caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
         )
 
-    # Try primary photo
-    try:
-        return await _send_photo(final_photo)
-    except Exception as e1:
-        logger.warning(f"Primary photo failed ({e1}), trying AI fallback image...")
-
-    # Fallback: try a Pollinations AI-generated image
-    try:
-        ai_img_bytes = await download_image(
-            f"https://image.pollinations.ai/prompt/technology+news+digital?width=800&height=450&nologo=true"
-        )
-        if ai_img_bytes:
-            return await _send_photo(ai_img_bytes)
-    except Exception as e2:
-        logger.warning(f"AI fallback image also failed ({e2}), sending text-only...")
-
-    # Last resort: text-only message (no photo)
-    try:
+    async def _send_text_only():
+        """Always works — disable_web_page_preview prevents Telegram from fetching URLs in caption."""
         return await context.bot.send_message(
             chat_id=chat_id,
             text=caption_safe,
             reply_markup=keyboard,
-            parse_mode="HTML"
+            parse_mode="HTML",
+            disable_web_page_preview=True,  # ← KEY FIX: prevents 'Wrong type of web page content'
         )
+
+    # Step 1: Try primary photo (skip if None/empty)
+    if final_photo:
+        try:
+            result = await _send_photo(final_photo)
+            if result:
+                return result
+        except Exception as e1:
+            logger.warning(f"Primary photo failed ({e1}), trying AI fallback...")
+
+    # Step 2: Try AI-generated fallback image
+    try:
+        ai_img_bytes = await download_image(
+            "https://image.pollinations.ai/prompt/technology+news+digital?width=800&height=450&nologo=true",
+            min_size=1000  # AI images can be smaller than article images
+        )
+        if ai_img_bytes:
+            result = await _send_photo(ai_img_bytes)
+            if result:
+                return result
+    except Exception as e2:
+        logger.warning(f"AI fallback image failed ({e2}), sending text-only...")
+
+    # Step 3: Text-only — always succeeds
+    try:
+        return await _send_text_only()
     except Exception as e3:
         logger.error(f"Even text-only message failed: {e3}")
         raise
@@ -437,7 +450,7 @@ def is_tech_relevant(text: str) -> bool:
 # Telegram accepts only these image formats
 _ACCEPTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
-async def download_image(url: str, timeout: int = 20) -> bytes:
+async def download_image(url: str, timeout: int = 20, min_size: int = 5000) -> bytes:
     """Downloads an image, validates it's a raster format Telegram accepts. Returns b'' on failure."""
     if not url or not url.startswith("http"):
         return b""
@@ -457,9 +470,9 @@ async def download_image(url: str, timeout: int = 20) -> bytes:
                 return b""
 
             content = resp.content
-            # Too small = error page or icon, not a real article image
-            if len(content) < 5000:
-                logger.warning(f"Rejected image (too small {len(content)} bytes): {url}")
+            # Too small = error page, icon, or tracker pixel (min_size is configurable)
+            if len(content) < min_size:
+                logger.warning(f"Rejected image (too small {len(content)} bytes, min={min_size}): {url}")
                 return b""
 
             # Quick magic-byte check: reject SVG/HTML that bypass Content-Type
@@ -475,31 +488,34 @@ async def download_image(url: str, timeout: int = 20) -> bytes:
 
 async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news digital") -> object:
     """
-    Download and validate a photo for Telegram:
-    1. Try the given URL
-    2. Try AI-generated image via Pollinations
-    3. Try the hardcoded DEFAULT_IMAGE
-    Always returns bytes or a Telegram file_id string.
+    Download and validate a photo for Telegram.
+    Returns: bytes (valid image) | Telegram file_id str | None (send text-only)
+    NEVER returns a raw http URL — Telegram must never fetch URLs itself.
     """
-    if not photo_url:
-        pass  # skip to fallback chain
-    elif not photo_url.startswith("http"):
-        return photo_url  # Telegram file_id — use as-is
-    else:
+    if photo_url and not photo_url.startswith("http"):
+        return photo_url  # Telegram file_id — valid as-is
+
+    if photo_url and photo_url.startswith("http"):
         img_bytes = await download_image(photo_url)
         if img_bytes:
             return img_bytes
+        logger.info(f"Primary image rejected/failed: {photo_url}")
 
-    # Fallback 1: AI-generated image
+    # Fallback 1: AI-generated thematic image
     safe_prompt = urllib.parse.quote(fallback_prompt.strip())
     ai_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=450&nologo=true"
-    ai_bytes = await download_image(ai_url, timeout=25)
+    ai_bytes = await download_image(ai_url, timeout=25, min_size=1000)
     if ai_bytes:
         return ai_bytes
 
-    # Fallback 2: hardcoded default
+    # Fallback 2: hardcoded known-good default
     fallback_bytes = await download_image(DEFAULT_IMAGE, timeout=25)
-    return fallback_bytes if fallback_bytes else DEFAULT_IMAGE
+    if fallback_bytes:
+        return fallback_bytes
+
+    # All failed — return None, send_article_media will use text-only
+    logger.warning("All image sources failed, will send text-only post.")
+    return None
 
 async def process_and_translate(text_content: str) -> dict:
     # Limit input to avoid huge prompts
