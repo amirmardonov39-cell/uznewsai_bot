@@ -174,9 +174,18 @@ def init_db():
             value TEXT
         )
     """)
-    # Safely attach new column for video support backwards compatibility
+    # Safely attach new columns (backwards compatibility)
+    for col_def in [
+        "ALTER TABLE articles ADD COLUMN media_type TEXT DEFAULT 'photo'",
+        "ALTER TABLE articles ADD COLUMN title_hash TEXT DEFAULT ''",
+    ]:
+        try:
+            cursor.execute(col_def)
+        except sqlite3.OperationalError:
+            pass
+    # Index for fast title dedup lookup
     try:
-        cursor.execute("ALTER TABLE articles ADD COLUMN media_type TEXT DEFAULT 'photo'")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_title_hash ON articles(title_hash)")
     except sqlite3.OperationalError:
         pass
 
@@ -235,14 +244,38 @@ def is_link_processed(link: str) -> bool:
     conn.close()
     return result is not None
 
-def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_type: str = "photo") -> int:
+def normalize_title(title: str) -> str:
+    """Normalize a title/headline for deduplication: lowercase, remove punctuation, short words."""
+    if not title:
+        return ""
+    t = title.lower().strip()
+    # Remove punctuation
+    t = re.sub(r'[^\w\s]', '', t)
+    # Remove very short words (articles, prepositions)
+    words = [w for w in t.split() if len(w) > 2]
+    # Take first 6 significant words to form a stable fingerprint
+    return ' '.join(words[:6])
+
+def is_title_processed(title: str) -> bool:
+    """Check if a news item with a very similar title was already processed (dedup by content)."""
+    fingerprint = normalize_title(title)
+    if not fingerprint or len(fingerprint) < 10:
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM articles WHERE title_hash = ?", (fingerprint,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
+
+def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_type: str = "photo", title_hash: str = "") -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT OR REPLACE INTO articles (link, text_uz, text_ru, photo_url, media_type)
-            VALUES (?, ?, ?, ?, ?)
-        """, (link, text_uz, text_ru, photo_url, media_type))
+            INSERT OR REPLACE INTO articles (link, text_uz, text_ru, photo_url, media_type, title_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (link, text_uz, text_ru, photo_url, media_type, title_hash))
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -440,6 +473,7 @@ SOURCES = {
         "https://t.me/s/digest_uz",
         "https://t.me/s/exploitex",
         "https://t.me/s/pulatov_kh",
+        "https://t.me/s/itpark_uz",
         # --- AI / ML ---
         "https://t.me/s/ai_machinelearning_big_data",
         "https://t.me/s/deeplearning_ru",
@@ -450,44 +484,64 @@ SOURCES = {
         "https://t.me/s/fintech_ru",
         # --- Law / Legal tech ---
         "https://t.me/s/legaltech_news",
-        # --- Grants & Events ---
-        "https://t.me/s/itpark_uz",
+        # --- Grants ---
         "https://t.me/s/grants_and_scholarships",
     ],
     "rss": [
-        # --- AI & Tech (global) ---
+        # ===== AI & Machine Learning =====
         "https://techcrunch.com/feed/",
         "https://venturebeat.com/feed/",
         "https://www.artificialintelligence-news.com/feed/",
         "https://www.marktechpost.com/feed/",
         "https://www.technologyreview.com/feed/",
+        "https://huggingface.co/blog/feed.xml",
+        "https://hnrss.org/newest?q=AI+OR+LLM+OR+ChatGPT",
+        "https://www.unite.ai/feed/",                         # Unite AI
+        "https://syncedreview.com/feed/",                    # Synced AI Review
+        "https://aiweekly.co/issues.rss",                    # AI Weekly digest
+        # ===== Tech General =====
         "https://www.theverge.com/rss/index.xml",
         "https://feeds.arstechnica.com/arstechnica/technology-lab",
         "https://www.wired.com/feed/rss",
         "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",
-        "https://hnrss.org/newest?q=AI+grant+OR+AI+funding",
-        "https://hnrss.org/newest?q=AI+law+OR+AI+regulation",
-        # --- AI Research ---
-        "https://huggingface.co/blog/feed.xml",
-        # --- Cyber & Security ---
+        "https://cnet.com/rss/news/",
+        "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+        "https://feeds.bloomberg.com/technology/news.rss",   # Bloomberg Tech
+        "https://www.reuters.com/technology/rss",            # Reuters Tech
+        "https://www.businessinsider.com/tech.rss",         # Business Insider Tech
+        # ===== Cybersecurity =====
         "https://exploit.media/feed/",
-        # --- Fintech ---
+        "https://feeds.feedburner.com/TheHackersNews",        # The Hacker News
+        "https://krebsonsecurity.com/feed/",                  # Krebs on Security
+        "https://www.darkreading.com/rss.xml",               # Dark Reading
+        # ===== Fintech & Finance =====
         "https://forklog.com/feed/",
         "https://www.fintechfutures.com/feed/",
         "https://www.pymnts.com/feed/",
-        # --- Legal & Regulation ---
-        "https://iapp.org/feed/",                       # Privacy & Data law
-        "https://www.legaltech.news/feed",              # Legaltech
-        "https://www.lawfaremedia.org/feed",            # Tech policy & law
-        # --- Grants & Innovation funding ---
-        "https://ec.europa.eu/newsroom/all-services-rss.cfm",  # EU grants
-        "https://hnrss.org/newest?q=startup+grant+OR+AI+grant",
-        # --- Russian/CIS tech ---
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",   # CoinDesk crypto
+        "https://cointelegraph.com/rss",                     # CoinTelegraph
+        "https://feeds.bloomberg.com/markets/news.rss",     # Bloomberg Markets
+        "https://www.finextra.com/rss/headlines.aspx",       # FinExtra
+        "https://www.bankingtech.com/feed/",                 # Banking Tech
+        "https://hnrss.org/newest?q=fintech+OR+neobank+OR+crypto+funding",
+        # ===== Legal & Regulation =====
+        "https://iapp.org/feed/",                            # IAPP Privacy law
+        "https://www.legaltech.news/feed",                   # Legaltech
+        "https://www.lawfaremedia.org/feed",                 # Tech policy & law
+        "https://hnrss.org/newest?q=AI+law+OR+AI+regulation+OR+data+privacy",
+        "https://feeds.feedburner.com/typepad/alleywatch",   # tech law commentary
+        # ===== Grants, Funding & Startup =====
+        "https://hnrss.org/newest?q=startup+grant+OR+AI+grant+OR+innovation+fund",
+        "https://hnrss.org/newest?q=seed+funding+OR+series+a+OR+pre-seed",
+        "https://www.eu-startups.com/feed/",                 # EU Startups funding
+        "https://techfundingnews.com/feed/",                 # Tech Funding News
+        "https://news.crunchbase.com/feed/",                 # Crunchbase News
+        # ===== Events & Conferences =====
+        "https://hnrss.org/newest?q=AI+conference+OR+AI+summit+OR+tech+event",
+        # ===== Russian & CIS =====
         "https://habr.com/ru/rss/all/all/",
-        # --- Events ---
-        "https://hnrss.org/newest?q=AI+conference+OR+AI+summit+OR+AI+event",
-        "https://cnet.com/rss/news/",
-        "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+        "https://vc.ru/rss/all",                             # vc.ru all
+        "https://tjournal.ru/rss",                           # TJournal
     ]
 }
 
@@ -672,30 +726,45 @@ def fetch_latest_news():
                                     photo_url = extracted
                     
                     if text and link:
-                        news_items.append({"text": text, "link": link, "photo_url": photo_url})
+                        news_items.append({"text": text, "link": link, "photo_url": photo_url, "published": 0})
         except Exception as e:
             logger.error(f"Error scraping Telegram channel {tg_url}: {e}")
 
-    # 2. RSS Feeds
+    # 2. RSS Feeds — collect and sort by publish date (newest first)
+    rss_items = []
     for rss_url in SOURCES["rss"]:
         try:
             feed = feedparser.parse(rss_url)
-            for entry in feed.entries[:2]: 
-                text_content = BeautifulSoup(entry.summary, "html.parser").get_text(separator=' ', strip=True) if hasattr(entry, 'summary') else ""
+            for entry in feed.entries[:5]:
                 link = getattr(entry, 'link', '')
-                
+                if not link:
+                    continue
+                title = getattr(entry, 'title', '')
+                summary_html = getattr(entry, 'summary', '') if hasattr(entry, 'summary') else ''
+                text_content = BeautifulSoup(summary_html, "html.parser").get_text(separator=' ', strip=True)
+                # Prepend title so we always have something even if summary is empty
+                if title and title not in text_content:
+                    text_content = f"{title}. {text_content}".strip()
+                if not text_content:
+                    text_content = title
+
+                # Publish time for sorting (epoch seconds; 0 = unknown)
+                pub_ts = 0
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    try:
+                        import calendar
+                        pub_ts = int(calendar.timegm(entry.published_parsed))
+                    except Exception:
+                        pass
+
                 photo_url = DEFAULT_IMAGE
                 if hasattr(entry, 'media_content') and len(entry.media_content) > 0:
                     photo_url = entry.media_content[0].get('url', DEFAULT_IMAGE)
-                
-                # Check for image inside summary HTML
-                if photo_url == DEFAULT_IMAGE and hasattr(entry, 'summary'):
-                    summary_soup = BeautifulSoup(entry.summary, "html.parser")
+                if photo_url == DEFAULT_IMAGE and summary_html:
+                    summary_soup = BeautifulSoup(summary_html, "html.parser")
                     img = summary_soup.find('img')
                     if img and img.get('src'):
                         photo_url = img['src']
-                        
-                # Check for image inside content HTML
                 if photo_url == DEFAULT_IMAGE and hasattr(entry, 'content'):
                     for content in entry.content:
                         if content.value:
@@ -704,14 +773,17 @@ def fetch_latest_news():
                             if img and img.get('src'):
                                 photo_url = img['src']
                                 break
-                
+
                 if link and text_content:
-                    news_items.append({"text": text_content, "link": link, "photo_url": photo_url})
+                    rss_items.append({"text": text_content, "link": link, "photo_url": photo_url, "published": pub_ts})
         except Exception as e:
             logger.error(f"Error scraping RSS {rss_url}: {e}")
-            
-    # Shuffle sources to ensure diversity
-    random.shuffle(news_items)
+
+    # Sort RSS by publish date descending (freshest first)
+    rss_items.sort(key=lambda x: x["published"], reverse=True)
+    news_items.extend(rss_items)
+
+    logger.info(f"Total raw items collected: {len(news_items)} (TG + RSS)")
     return news_items
 
 async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
@@ -751,10 +823,17 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         if is_link_processed(url):
             continue
 
+        # Dedup by title fingerprint (same story, different URL)
+        raw_title = item['text'].split('\n')[0][:100]  # first line as rough title
+        if is_title_processed(raw_title):
+            logger.info(f"Skipping duplicate story (title match): {url}")
+            save_article(url, "", "", "", title_hash=normalize_title(raw_title))  # mark URL too
+            continue
+
         # Pre-filter: skip obviously off-topic content before even calling Gemini
         if not is_tech_relevant(item['text']):
             logger.info(f"Skipping off-topic item (pre-filter): {url}")
-            save_article(url, "", "", "")  # mark as processed so we skip next time
+            save_article(url, "", "", "", title_hash=normalize_title(raw_title))
             continue
             
         logger.info(f"Processing new item: {url}")
@@ -790,7 +869,8 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
                 photo_url = get_thematic_image(translated.get('image_prompt', 'tech news'))
 
         # 2. Save and get article ID
-        article_id = save_article(url, translated['uz'], translated['ru'], photo_url)
+        title_fingerprint = normalize_title(translated.get('title_ru', '') or raw_title)
+        article_id = save_article(url, translated['uz'], translated['ru'], photo_url, title_hash=title_fingerprint)
         if article_id == -1:
             logger.warning(f"Duplicate or save error for {url}")
             continue
