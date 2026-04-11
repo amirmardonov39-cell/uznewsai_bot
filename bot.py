@@ -11,6 +11,7 @@ import asyncio
 import re
 import urllib.parse
 import httpx
+import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -44,13 +45,13 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_ID = "gemini-2.5-flash-lite"
 
 class TranslatedArticle(BaseModel):
-    emoji: str = Field(description="One tight, relevant emoji, e.g. ⚡️", default="⚡️")
-    headline_ru: str = Field(description="Catchy but professional headline in Russian, max 8 words", default="")
-    headline_uz: str = Field(description="Same headline in Uzbek, max 8 words", default="")
-    analysis_ru: str = Field(description="ONE punchy sentence in Russian that captures the essence and hooks the reader. Max 120 characters. No explanation — just the hook.", default="")
-    analysis_uz: str = Field(description="ONE punchy sentence in Uzbek that hooks the reader. Max 120 characters.", default="")
-    hashtags: str = Field(description="1-2 narrow tags like #CyberLaw #AI", default="#TechNews #AI")
-    image_prompt: str = Field(description="Short English prompt for AI image", default="digital technology artificial intelligence")
+    emoji: str = Field(description="One highly relevant emoji for the news topic. E.g. ⚖️ for law, 🔐 for cybersecurity, 💰 for fintech, 🤖 for AI/LegalTech", default="⚖️")
+    headline_ru: str = Field(description="Intriguing, attention-grabbing Russian headline with emoji at start. Max 10 words. Must be specific to CyberLaw/LegalTech/FinTech/Legislation topic.", default="")
+    headline_uz: str = Field(description="Same headline translated to Uzbek. Max 10 words.", default="")
+    analysis_ru: str = Field(description="Exactly 2 sentences in Russian. SENTENCE 1: State the core fact crisply (who did what). SENTENCE 2: Human analytical insight — why this matters, what changes, what the reader should think about. Sound like a knowledgeable journalist, not a robot. Max 320 chars total.", default="")
+    analysis_uz: str = Field(description="Exactly 2 sentences in Uzbek, mirroring analysis_ru in meaning and tone. Max 320 chars total.", default="")
+    hashtags: str = Field(description="2-3 narrow niche tags. Must be from: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Huquq #Kriptovalyuta #DataPrivacy #Regulation", default="#CyberLaw #LegalTech")
+    image_prompt: str = Field(description="Short English prompt for a relevant image: courtroom, legal AI, cryptocurrency, cybersecurity", default="cybersecurity law digital justice")
 
 def strip_artificial_words(text: str) -> str:
     """Remove artificial marker words like 'Важно:' and 'Muhim:' from text."""
@@ -60,29 +61,31 @@ def strip_artificial_words(text: str) -> str:
     text = re.sub(r'\bMUHIM:\s*', '', text)
     return text
 
-def force_one_sentence(text: str, max_chars: int = 140) -> str:
+def force_two_sentences(text: str, max_chars: int = 350) -> str:
     """
-    HARD enforcement: always returns only the FIRST sentence.
-    No matter what the AI returns — we take exactly one sentence.
+    Allows up to TWO sentences. Cuts after the second sentence-ending punctuation.
+    Never returns more than max_chars characters.
     """
     if not text:
         return text
     text = text.strip()
-    # Split on first sentence-ending punctuation followed by space or end
-    match = re.search(r'([.!?»\"\')])(\s|$)', text)
-    if match:
-        first = text[:match.start() + 1].strip()
+    # Find all sentence-ending positions
+    matches = list(re.finditer(r'[.!?»](?=\s|$)', text))
+    if len(matches) >= 2:
+        # Keep up to and including the second sentence
+        end = matches[1].start() + 1
+        result = text[:end].strip()
+    elif len(matches) == 1:
+        result = text[:matches[0].start() + 1].strip()
     else:
-        # No punctuation found — take everything up to max_chars
-        first = text
+        result = text
     # Final hard char limit
-    if len(first) > max_chars:
-        # cut at last space within limit
-        cut = first[:max_chars].rsplit(' ', 1)[0].rstrip()
+    if len(result) > max_chars:
+        cut = result[:max_chars].rsplit(' ', 1)[0].rstrip()
         if cut and cut[-1] not in '.!?':
             cut += '.'
-        first = cut
-    return first
+        result = cut
+    return result
 
 def truncate_to_sentence(text: str, limit: int) -> str:
     """
@@ -314,70 +317,72 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """Ты пишешь подписи для Telegram-канала о технологиях.
+SYSTEM_PROMPT = """Ты — эксперт-аналитик в области LegalTech, киберправа и финтеха.
+Ты пишешь посты для Telegram-канала @aileaderuz.
 
-ТВОЯ ЗАДАЧА: для каждой новости написать ровно ОДНО предложение — на русском (analysis_ru) и одно на узбекском (analysis_uz).
+ТЕМЫ (только эти 4, строго):
+1. Cyber Law & Crimes: киберпреступность, судебные прецеденты, регулирование ИИ
+2. LegalTech & AI: инструменты автоматизации права, ИИ для юристов
+3. FinTech & Law: криптовалюты, цифровые валюты, финансовое регулирование
+4. Legislation: изменения в законах (Узбекистан, ЕС, США) по ИИ и кибербезопасности
 
-УСЛОВИЯ:
-1. ОДНО предложение. Не два. Не три. Одно.
-2. Максимум 120 символов в каждом поле.
-3. Пиши факт + интрига. Читатель должен захотеть перейти по ссылке.
-4. Никаких вводных слов: «Важно:», «Как известно,», «Эксперты считают» — запрещено.
+ГЛАВНОЕ ПРАВИЛО ДЛЯ analysis_ru / analysis_uz:
+Пиши КАК УМНЫЙ ЧЕЛОВЕК, а не как робот.
+- ПРЕДЛОЖЕНИЕ 1: Чёткий факт — кто, что, когда сделал. Конкретно и ёмко.
+- ПРЕДЛОЖЕНИЕ 2: Живой аналитический комментарий — почему это важно, что это меняет, или какой вопрос это поднимает. Этот комментарий должен ЗАЦЕПИТЬ читателя.
 
-ПРИМЕРЫ analysis_ru (копируй этот стиль):
-- «Т-Банк заменил оператора ИИ-агентом — и тот проработал год без единого выходного.»
-- «OpenAI выпустила модель, пишущую код лучше 90% программистов.»
-- «Tesla отзывает 2 млн машин из-за бага в автопилоте.»
-- «Узбекистан первым в СНГ принял закон об ИИ — и это меняет рынок.»
+ЭТОТ СТИЛЬ — ЗАПРЕЩЁН (скучно и роботообразно):
+❌ «Новый AI-аналитик отслеживает движения 'умных денег'» (без контекста и смысла)
+❌ «Это важное событие в области технологий.»
 
-ПРИМЕРЫ analysis_uz (то же, на узбекском):
-- «T-Bank AI agentni operatorga almashtirdi — u bir yil dam olmasdan ishladi.»
-- «OpenAI dasturchilarning 90% dan yaxshiroq kod yozadigan model chiqardi.»
+ЭТОТ СТИЛЬ — ПРАВИЛЬНЫЙ (живо и цепляет):
+✅ «7 апреля DOJ США запустил NFED — первое ИИ-ведомство, которое в реальном времени охотится за ransomware и фишинг-атаками. Если у вас есть бизнес в США — пора пересматривать политику кибербезопасности.»
+✅ «SEC и CFTC впервые признали Bitcoin «цифровым товаром», а не ценной бумагой — это открывает дорогу к институциональным инвестициям и снимает правовую неопределённость, мучившую рынок 10 лет.»
+✅ «Узбекистан обязал все министерства создать кибер-отделы к 1 апреля 2026 года. Звучит как формальность — но это первый шаг к реальной ответственности за утечки данных граждан.»
 
-ОТВЕЧАЙ СТРОГО JSON. Никаких HTML тегов внутри полей."""
+headline_ru: Интригующий заголовок RU с эмодзи. Пример: «🔐 Узбекистан строит киберщит: Что изменится с апреля?»
+headline_uz: Тот же заголовок UZ. Пример: «🔐 O'zbekiston kibershit quryapti: Apreldan nima o'zgaradi?»
+hashtags: 2-3 тега из: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Kriptovalyuta #DataPrivacy #Regulation
 
-# Keywords for pre-filter: AI, tech, fintech, law, grants, events
+ЗАПРЕЩЕНО: медицина, вакцины, война, спорт, развлечения, вводные слова «Важно: / Muhim:», HTML-теги.
+ОТВЕЧАЙ СТРОГО JSON."""
+
+# Keywords for pre-filter — STRICTLY niche: CyberLaw, LegalTech, FinTech, AI Legislation only
 TECH_KEYWORDS = [
-    # --- AI / ML ---
-    "ai", "artificial intelligence", "machine learning", "deep learning",
-    "neural", "llm", "gpt", "agi", "openai", "chatgpt", "deepseek",
-    "anthropic", "claude", "gemini", "copilot", "mistral", "llama",
-    "нейро", "искусственный интеллект", "ии", "генеративн",
-    # --- Tech general ---
-    "tech", "software", "hardware", "startup", "robot", "automation",
-    "cloud", "data", "algorithm", "gpu", "chip", "semiconductor",
-    "open source", "api", "model", "benchmark", "programming", "developer",
-    "digital", "internet", "5g", "quantum", "cybersecurity", "hack",
-    "технолог", "программ", "кибербезопасность", "разработ", "цифров",
-    "стартап", "приложени", "платформ",
-    # --- Big Tech ---
-    "apple", "google", "microsoft", "meta", "nvidia", "tesla",
-    "amazon", "openai", "huawei", "samsung",
-    # --- Fintech / Crypto ---
-    "fintech", "blockchain", "crypto", "bitcoin", "ethereum",
-    "defi", "nft", "cbdc", "цифровой рубль", "цифровой сум",
-    "payment", "banking", "neobank", "invest", "venture", "ipo",
-    "финтех", "блокчейн", "криптовалют", "инвестиц",
-    # --- Legal / Regulation ---
-    "regulation", "policy", "law", "legal", "compliance", "gdpr",
-    "legislation", "court", "lawsuit", "fine", "ban", "privacy",
-    "закон", "право", "регулиров", "суд", "штраф", "юридич",
-    "персональные данные", "защита данных", "qonun", "huquq",
-    # --- Grants & Funding ---
-    "grant", "funding", "гранты", "грант", "финансиров",
-    "innovation fund", "инновационный фонд", "it-park",
-    "fellowship", "scholarship", "стипендия", "конкурс",
-    "accelerator", "incubator", "акселератор", "инкубатор",
-    "seed", "series a", "series b", "pre-seed",
-    # --- Events & Conferences ---
-    "conference", "summit", "forum", "expo", "exhibition", "hackathon",
-    "workshop", "webinar", "meetup", "gitex", "ces", "web summit",
-    "конференц", "выставка", "форум", "хакатон", "вебинар",
-    "мероприятие", "event", "techcrunch disrupt", "innovate",
-    # --- Uzbekistan / CIS specific ---
-    "uzbekistan", "узбекистан", "digital uzbekistan", "цифровизац",
-    "silicon", "hub", "it park", "astana hub", "skolkovo",
-    "ташкент", "tashkent", "самарканд", "samarkand",
+    # --- Cyber Law & Cybercrime ---
+    "cybercrime", "cyber crime", "cyberattack", "cyber attack", "ransomware",
+    "phishing", "malware", "data breach", "hacker", "hacking", "exploit",
+    "cybersecurity law", "cyber law", "киберпреступ", "кибератак", "кибербезопасност",
+    "утечка данных", "хакер", "ransomware", "фишинг", "вредоносн",
+    "cyberjinoyat", "kiberhujum", "kiberxavfsizlik",
+    # --- AI Regulation & Law ---
+    "ai regulation", "ai law", "ai act", "ai policy", "artificial intelligence law",
+    "ai governance", "ai ethics", "ai liability", "ai court",
+    "regulation of ai", "eu ai act", "ai legislation",
+    "регулирование ии", "закон об ии", "ии регулиров", "искусственный интеллект закон",
+    "si qonun", "sun'iy intellekt qonun",
+    # --- LegalTech ---
+    "legaltech", "legal tech", "legal ai", "ai lawyer", "ai legal",
+    "contract automation", "legal automation", "law firm ai", "legal chatbot",
+    "юридическ", "юрист", "legaltech", "правовой ии", "суд", "судебн",
+    "yurist", "huquqiy", "sud",
+    # --- Data Privacy & GDPR ---
+    "gdpr", "data privacy", "data protection", "privacy law", "personal data",
+    "персональные данные", "защита данных", "конфиденциальность",
+    "shaxsiy ma'lumot", "maxfiylik",
+    # --- FinTech & Crypto Regulation ---
+    "fintech", "crypto regulation", "cryptocurrency law", "blockchain law",
+    "bitcoin regulation", "stablecoin", "cbdc", "digital currency law",
+    "defi regulation", "sec crypto", "cftc", "crypto lawsuit",
+    "цифровой сум", "цифровой рубль", "криптовалют", "крипто регулиров",
+    "блокчейн закон", "финтех", "цифровая валюта",
+    "raqamli so'm", "kriptovalyuta", "blokcheyn",
+    # --- Legislation: Uzbekistan / EU / USA ---
+    "cybersecurity strategy", "national ai policy", "ai framework",
+    "cybersecurity act", "cyber resilience act",
+    "стратегия кибербезопасности", "цифровизац", "цифровой узбекистан",
+    "digital uzbekistan", "it-park uzbekistan", "o'zbekiston raqamli",
+    "kiberhavfsizlik strategiyasi",
 ]
 
 # Keywords that signal PURE political/military/geopolitical news (no tech angle)
@@ -439,6 +444,7 @@ def is_tech_relevant(text: str) -> bool:
 
 # Telegram accepts only these image formats
 _ACCEPTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
 
 async def download_image(url: str, timeout: int = 20, min_size: int = 5000) -> bytes:
     """Downloads an image, validates it's a raster format Telegram accepts. Returns b'' on failure."""
@@ -513,18 +519,20 @@ async def process_and_translate(text_content: str) -> dict:
         ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # HARD enforcement: force exactly ONE sentence, max 140 chars
+        # Allow up to TWO sentences, max 350 chars — enough for a real human-style analysis
         analysis_ru_raw = strip_artificial_words((data.get('analysis_ru') or '').strip())
         analysis_ru_raw = analysis_ru_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        analysis_ru_raw = force_one_sentence(analysis_ru_raw, max_chars=140)
+        analysis_ru_raw = force_two_sentences(analysis_ru_raw, max_chars=350)
 
         analysis_uz_raw = strip_artificial_words((data.get('analysis_uz') or '').strip())
         analysis_uz_raw = analysis_uz_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        analysis_uz_raw = force_one_sentence(analysis_uz_raw, max_chars=140)
+        analysis_uz_raw = force_two_sentences(analysis_uz_raw, max_chars=350)
 
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+        # RU block: emoji + bold headline + 1-2 sentence body
         ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
+        # UZ block: emoji + bold headline + 1-2 sentence body + hashtags
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
 
         logger.info(f"Final RU analysis ({len(analysis_ru_raw)} chars): {analysis_ru_raw}")
@@ -533,7 +541,7 @@ async def process_and_translate(text_content: str) -> dict:
             "ru": ru_text,
             "uz": uz_text,
             "title_ru": ru_header_ru,
-            "image_prompt": (data.get('image_prompt') or 'digital technology ai').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            "image_prompt": (data.get('image_prompt') or 'cybersecurity law courtroom digital').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         }
 
     generator_config = types.GenerateContentConfig(
@@ -654,10 +662,10 @@ SOURCES = {
 DEFAULT_IMAGE = "https://telegra.ph/file/55de2abdf5e6e3d7c56dc.jpg"
 
 def get_thematic_image(prompt: str) -> str:
-    """Fallback if no original image is found. Generates an AI image via Pollinations.ai"""
+    """Fallback: generates a themed AI image via Pollinations.ai (free, no API key)."""
     safe_prompt = urllib.parse.quote(prompt.strip())
-    # Free, instant AI image generation without API key
-    return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true"
+    seed = random.randint(1, 99999)
+    return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true&seed={seed}"
 
 async def extract_og_image(url: str) -> str:
     """Scrapes the original source URL for an OpenGraph or Twitter image."""
@@ -888,7 +896,23 @@ def fetch_latest_news():
     logger.info(f"Total raw items: {len(news_items)} from {len(tg_buckets)} TG channels + {len(rss_buckets)} RSS feeds")
     return news_items
 
+def is_daytime_tashkent() -> bool:
+    """
+    Returns True if current time is within working hours in Tashkent (UTC+5).
+    Working hours: 09:00 – 23:00. No posts at night.
+    """
+    tashkent_tz = datetime.timezone(datetime.timedelta(hours=5))
+    now = datetime.datetime.now(tz=tashkent_tz)
+    return 9 <= now.hour < 23
+
 async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
+    # Night-time guard: 09:00–23:00 Tashkent (UTC+5) only
+    if not is_daytime_tashkent():
+        tashkent_tz = datetime.timezone(datetime.timedelta(hours=5))
+        now = datetime.datetime.now(tz=tashkent_tz)
+        logger.info(f"Night-time in Tashkent ({now.strftime('%H:%M')}) — aggregator skipped.")
+        return
+
     channel_id = get_publish_channel()
     admin_id = get_admin_chat()
     
@@ -900,6 +924,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info("Running aggregator job...")
+
     
     # Check daily limit (max 30 per day)
     conn = sqlite3.connect(DB_PATH)
@@ -980,12 +1005,13 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Duplicate or save error for {url}")
             continue
             
-        # 3. Send preview to Admin for review
-        body = f"{translated['ru']}\n\n➖➖➖\n\n{translated['uz']}"
-        footer = ""
-        if not url.startswith("manual_"):
-            footer += f"\n\n🔗 Подробно / Batafsil: {url}"
-        footer += "\n📢 @aileaderuz"
+        # Format: RU block → divider → UZ block → one source line → channel
+        ru_block = translated['ru']
+        uz_block = translated['uz']
+        source_line = f"\n\n🔗 Подробно / Batafsil: {url}" if not url.startswith("manual_") else ""
+        channel_line = "\n📢 @aileaderuz"
+        body = f"{ru_block}\n\n➖➖➖\n\n{uz_block}"
+        footer = source_line + channel_line
 
         combined_caption = body + footer
 
@@ -1349,11 +1375,13 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ Ошибка при сохранении.")
         return
         
-    body = f"{translated['ru']}\n\n➖➖➖\n\n{translated['uz']}"
-    footer = ""
-    if not link.startswith("manual_"):
-        footer += f"\n\n🔗 Подробно / Batafsil: {link}"
-    footer += "\n📢 @aileaderuz"
+    # Format: RU block → divider → UZ block → one source line → channel
+    ru_block = translated['ru']
+    uz_block = translated['uz']
+    source_line = f"\n\n🔗 Подробно / Batafsil: {link}" if not link.startswith("manual_") else ""
+    channel_line = "\n📢 @aileaderuz"
+    body = f"{ru_block}\n\n➖➖➖\n\n{uz_block}"
+    footer = source_line + channel_line
     
     caption_combined = body + footer
         
@@ -1408,11 +1436,10 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Handle schema updates where media_type might be None for old articles
             link, text_uz, text_ru, photo_url, media_type = row
             media_type = media_type or "photo"
+            source_line = f"\n\n🔗 Подробно / Batafsil: {link}" if not link.startswith("manual_") else ""
+            channel_line = "\n📢 @aileaderuz"
             body = f"{text_ru}\n\n{text_uz}"
-            footer = ""
-            if not link.startswith("manual_"):
-                footer += f"\n\n🔗 Подробно / Batafsil: {link}"
-            footer += "\n📢 @aileaderuz"
+            footer = source_line + channel_line
             
             pass # no truncation
             caption_combined = body + footer
@@ -1493,7 +1520,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
     job_queue = app.job_queue
-    job_queue.run_repeating(run_aggregator_job, interval=3600, first=30)
+    # Run every 2 hours; daytime-only check is inside run_aggregator_job
+    job_queue.run_repeating(run_aggregator_job, interval=7200, first=60)
 
     logger.info("Bot is running V7 (Hook style, /fetch, /status)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
