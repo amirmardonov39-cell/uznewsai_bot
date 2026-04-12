@@ -52,6 +52,7 @@ class TranslatedArticle(BaseModel):
     analysis_uz: str = Field(description="Exactly 2 sentences in Uzbek, mirroring analysis_ru in meaning and tone. Max 320 chars total.", default="")
     hashtags: str = Field(description="2-3 narrow niche tags. Must be from: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Huquq #Kriptovalyuta #DataPrivacy #Regulation", default="#CyberLaw #LegalTech")
     image_prompt: str = Field(description="Short English prompt for a relevant image: courtroom, legal AI, cryptocurrency, cybersecurity", default="cybersecurity law digital justice")
+    reject: bool = Field(description="Set to true ONLY IF the news is completely irrelevant to CyberLaw, LegalTech, FinTech, or AI legislation (e.g. general crimes, sports, random tech, warehouse fires).", default=False)
 
 def strip_artificial_words(text: str) -> str:
     """Remove artificial marker words like 'Важно:' and 'Muhim:' from text."""
@@ -60,51 +61,6 @@ def strip_artificial_words(text: str) -> str:
     text = re.sub(r'\bВАЖНО:\s*', '', text)
     text = re.sub(r'\bMUHIM:\s*', '', text)
     return text
-
-def force_two_sentences(text: str, max_chars: int = 350) -> str:
-    """
-    Allows up to TWO sentences. Cuts after the second sentence-ending punctuation.
-    Never returns more than max_chars characters.
-    """
-    if not text:
-        return text
-    text = text.strip()
-    # Find all sentence-ending positions
-    matches = list(re.finditer(r'[.!?»](?=\s|$)', text))
-    if len(matches) >= 2:
-        # Keep up to and including the second sentence
-        end = matches[1].start() + 1
-        result = text[:end].strip()
-    elif len(matches) == 1:
-        result = text[:matches[0].start() + 1].strip()
-    else:
-        result = text
-    # Final hard char limit
-    if len(result) > max_chars:
-        cut = result[:max_chars].rsplit(' ', 1)[0].rstrip()
-        if cut and cut[-1] not in '.!?':
-            cut += '.'
-        result = cut
-    return result
-
-def truncate_to_sentence(text: str, limit: int) -> str:
-    """
-    If text exceeds `limit` chars, cuts at the last complete sentence
-    (ending with . ! ?) within the limit. Never leaves an ellipsis —
-    the result always ends with proper punctuation.
-    """
-    if len(text) <= limit:
-        return text
-    chunk = text[:limit]
-    # Find the last sentence-ending punctuation
-    match = re.search(r'[.!?][^.!?]*$', chunk)
-    if match:
-        return chunk[:match.start() + 1]  # include the punctuation
-    # No sentence boundary found — cut at last space and add a period
-    cut = chunk.rsplit(' ', 1)[0].rstrip()
-    if cut and cut[-1] not in '.!?':
-        cut += '.'
-    return cut
 
 _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
@@ -139,7 +95,7 @@ def safe_caption(text: str, limit: int = 1024) -> str:
     # Strip HTML from body and truncate at last sentence boundary
     body_plain = _HTML_TAG_RE.sub('', body)
     if len(body_plain) > body_limit:
-        body_plain = truncate_to_sentence(body_plain, body_limit)
+        return body_plain[:body_limit] + "..." + footer
 
     return body_plain + footer
 
@@ -535,6 +491,9 @@ async def process_and_translate(text_content: str) -> dict:
             data = json.loads(text)
         except Exception:
             return {"error": f"JSON Decode Error: {response_text}"}
+
+        if data.get('reject'):
+            return {"reject": True}
             
         emoji = data.get("emoji") or "⚡️"
         if emoji.strip() in ("🚫", "\U0001F6AB"):
@@ -543,14 +502,11 @@ async def process_and_translate(text_content: str) -> dict:
         ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # Allow up to TWO sentences, max 350 chars — enough for a real human-style analysis
         analysis_ru_raw = strip_artificial_words((data.get('analysis_ru') or '').strip())
         analysis_ru_raw = analysis_ru_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        analysis_ru_raw = force_two_sentences(analysis_ru_raw, max_chars=350)
 
         analysis_uz_raw = strip_artificial_words((data.get('analysis_uz') or '').strip())
         analysis_uz_raw = analysis_uz_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        analysis_uz_raw = force_two_sentences(analysis_uz_raw, max_chars=350)
 
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -558,8 +514,6 @@ async def process_and_translate(text_content: str) -> dict:
         ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
         # UZ block: emoji + bold headline + 1-2 sentence body + hashtags
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
-
-        logger.info(f"Final RU analysis ({len(analysis_ru_raw)} chars): {analysis_ru_raw}")
 
         return {
             "ru": ru_text,
@@ -950,15 +904,15 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running aggregator job...")
 
     
-    # Check daily limit (max 30 per day)
+    # Check daily limit (max 5 per day)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != '' AND link NOT LIKE 'manual_%'")
     count_today = cursor.fetchone()[0]
     conn.close()
     
-    if count_today >= 30:
-        logger.info("Daily limit of 30 articles reached. Skipping fetch.")
+    if count_today >= 5:
+        logger.info("Daily limit of 5 articles reached. Skipping fetch.")
         return
 
     news_items = await asyncio.to_thread(fetch_latest_news)
@@ -1004,8 +958,8 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Translation failed for {url}: {translated}")
             continue
 
-        # Skip if Gemini flagged it as off-topic (title starts with 🚫)
-        if translated.get('title_ru', '').startswith('🚫'):
+        # Skip if Gemini flagged it as off-topic
+        if translated.get('reject'):
             logger.info(f"Gemini flagged item as off-topic: {url}")
             save_article(url, "", "", "")
             continue
@@ -1329,6 +1283,10 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         err_str = translated.get("error", "Unknown error") if translated else "Internal Fallback Error"
         err_str = str(err_str).replace("<", "&lt;").replace(">", "&gt;")
         await update.message.reply_text(f"❌ Системная ошибка ИИ.\n\nТехническая деталь: <code>{err_str}</code>\n\n(Возможно, статья слишком короткая, либо это внутренняя ошибка Gemini API)", parse_mode="HTML")
+        return
+        
+    if translated.get("reject"):
+        await update.message.reply_text("❌ ИИ отклонил эту новость как не относящуюся к тематике канала (CyberLaw/LegalTech/FinTech).")
         return
         
     # --- Advanced link extraction for manual posts ---
