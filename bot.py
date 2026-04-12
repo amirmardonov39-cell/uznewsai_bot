@@ -482,25 +482,39 @@ async def download_image(url: str, timeout: int = 20, min_size: int = 5000) -> b
         logger.error(f"Failed to download image {url}: {e}")
         return b""
 
-async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news digital") -> object:
+async def resolve_photo(photo_url: str, fallback_prompt: str = "cybersecurity law digital") -> object:
     """
-    Download and validate a photo for Telegram.
-    Returns: bytes (valid image) | Telegram file_id str | None (no image — send text-only)
-    NEVER uses AI-generated images. NEVER returns a raw http URL.
+    ALWAYS returns an image — never None.
+    Priority: og:image bytes -> Pollinations AI -> DEFAULT_IMAGE bytes
     """
-    if not photo_url:
-        return None
+    # Telegram file_id (not a URL) — use directly
+    if photo_url and not photo_url.startswith("http"):
+        return photo_url
 
-    if not photo_url.startswith("http"):
-        return photo_url  # Telegram file_id — valid as-is
+    # Step 1: Try the real article og:image
+    if photo_url and photo_url.startswith("http"):
+        img_bytes = await download_image(photo_url, timeout=15, min_size=3000)
+        if img_bytes:
+            logger.info(f"Photo OK from og:image ({len(img_bytes)} bytes)")
+            return img_bytes
+        logger.warning(f"og:image failed: {photo_url[:60]} — trying AI fallback")
 
-    # Download and validate the real image
-    img_bytes = await download_image(photo_url)
-    if img_bytes:
-        return img_bytes
+    # Step 2: Pollinations AI image (free, no API key, topical)
+    try:
+        ai_url = get_thematic_image(fallback_prompt)
+        logger.info(f"Trying Pollinations AI image: {ai_url[:80]}")
+        ai_bytes = await download_image(ai_url, timeout=30, min_size=500)
+        if ai_bytes:
+            logger.info(f"Pollinations AI photo OK ({len(ai_bytes)} bytes)")
+            return ai_bytes
+        logger.warning("Pollinations returned empty/invalid image")
+    except Exception as e:
+        logger.error(f"Pollinations error: {e}")
 
-    logger.warning(f"Image download failed or rejected: {photo_url} — will send text-only")
-    return None
+    # Step 3: Absolute last resort — static image
+    logger.warning("Using DEFAULT_IMAGE as last resort")
+    default_bytes = await download_image(DEFAULT_IMAGE, timeout=10, min_size=100)
+    return default_bytes if default_bytes else None
 
 async def process_and_translate(text_content: str) -> dict:
     # Limit input to avoid huge prompts
@@ -508,7 +522,13 @@ async def process_and_translate(text_content: str) -> dict:
 
     def parse_gemini_json(response_text: str) -> dict:
         try:
-            data = json.loads(response_text)
+            # Strip markdown code blocks that Gemini sometimes wraps around JSON
+            text = response_text.strip()
+            if text.startswith("```"):
+                text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
+                text = re.sub(r'\s*```\s*$', '', text, flags=re.MULTILINE)
+                text = text.strip()
+            data = json.loads(text)
         except Exception:
             return {"error": f"JSON Decode Error: {response_text}"}
             
