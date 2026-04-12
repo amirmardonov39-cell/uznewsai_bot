@@ -491,9 +491,6 @@ async def process_and_translate(text_content: str) -> dict:
             data = json.loads(text)
         except Exception:
             return {"error": f"JSON Decode Error: {response_text}"}
-
-        if data.get('reject'):
-            return {"reject": True}
             
         emoji = data.get("emoji") or "⚡️"
         if emoji.strip() in ("🚫", "\U0001F6AB"):
@@ -519,7 +516,8 @@ async def process_and_translate(text_content: str) -> dict:
             "ru": ru_text,
             "uz": uz_text,
             "title_ru": ru_header_ru,
-            "image_prompt": (data.get('image_prompt') or 'cybersecurity law courtroom digital').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            "image_prompt": (data.get('image_prompt') or 'cybersecurity law courtroom digital').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
+            "reject": bool(data.get('reject'))
         }
 
     generator_config = types.GenerateContentConfig(
@@ -1283,10 +1281,6 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         err_str = translated.get("error", "Unknown error") if translated else "Internal Fallback Error"
         err_str = str(err_str).replace("<", "&lt;").replace(">", "&gt;")
         await update.message.reply_text(f"❌ Системная ошибка ИИ.\n\nТехническая деталь: <code>{err_str}</code>\n\n(Возможно, статья слишком короткая, либо это внутренняя ошибка Gemini API)", parse_mode="HTML")
-        return
-        
-    if translated.get("reject"):
-        await update.message.reply_text("❌ ИИ отклонил эту новость как не относящуюся к тематике канала (CyberLaw/LegalTech/FinTech).")
         return
         
     # --- Advanced link extraction for manual posts ---
