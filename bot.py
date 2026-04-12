@@ -574,7 +574,7 @@ async def process_and_translate(text_content: str) -> dict:
         response_mime_type="application/json",
         response_schema=TranslatedArticle,
         temperature=0.65,       # slightly more creative = punchier hooks
-        max_output_tokens=300   # physically impossible to write a novel with 300 tokens
+        max_output_tokens=1000  # Increased from 300 to accommodate longer 2-sentence analysis
     )
 
     max_retries = 3
