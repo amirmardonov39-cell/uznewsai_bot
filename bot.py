@@ -100,7 +100,14 @@ def safe_caption(text: str, limit: int = 1024) -> str:
     return body_plain + footer
 
 async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
-    """Sends photo/video with caption. Falls back to text-only if any photo step fails."""
+    """Sends photo/video with caption. Falls back to text-only if any photo step fails.
+    Raises ValueError if caption has no meaningful visible content (last line of defense).
+    """
+    # HARD GUARD: never send a post with empty/near-empty visible text
+    visible = _visible_len(caption_combined or "")
+    if visible < 40:
+        raise ValueError(f"send_article_media: caption too short ({visible} visible chars) — refusing to send empty post. Caption repr: {repr(caption_combined[:120])}")
+
     caption_safe = safe_caption(caption_combined)
 
     async def _send_photo(photo):
@@ -507,17 +514,35 @@ async def process_and_translate(text_content: str) -> dict:
 
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+        # --- Strict validation: reject if Gemini flagged it OR content is too thin ---
+        # Minimum: headline must be > 5 visible chars, analysis must be > 30 visible chars
+        headline_too_short = len(ru_header_ru) < 5 or len(ru_header_uz) < 5
+        analysis_too_short = len(analysis_ru_raw) < 30 or len(analysis_uz_raw) < 30
+        gemini_rejected = bool(data.get('reject'))
+
+        if gemini_rejected or headline_too_short or analysis_too_short:
+            reason = "Gemini reject=True" if gemini_rejected else f"content too short (headline={len(ru_header_ru)}, analysis_ru={len(analysis_ru_raw)}, analysis_uz={len(analysis_uz_raw)})"
+            logger.warning(f"parse_gemini_json: auto-rejecting — {reason}")
+            return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
+
         # RU block: emoji + bold headline + 1-2 sentence body
         ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
         # UZ block: emoji + bold headline + 1-2 sentence body + hashtags
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
+
+        # Final sanity check: visible text length must be meaningful
+        ru_visible = _visible_len(ru_text)
+        uz_visible = _visible_len(uz_text)
+        if ru_visible < 40 or uz_visible < 40:
+            logger.warning(f"parse_gemini_json: visible text too short after build (ru={ru_visible}, uz={uz_visible}) — auto-rejecting.")
+            return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
 
         return {
             "ru": ru_text,
             "uz": uz_text,
             "title_ru": ru_header_ru,
             "image_prompt": (data.get('image_prompt') or 'cybersecurity law courtroom digital').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-            "reject": bool(data.get('reject'))
+            "reject": False  # explicitly False since we passed all checks
         }
 
     generator_config = types.GenerateContentConfig(
@@ -956,9 +981,11 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Translation failed for {url}: {translated}")
             continue
 
-        # Skip if Gemini flagged it as off-topic
-        if translated.get('reject'):
-            logger.info(f"Gemini flagged item as off-topic: {url}")
+        # Skip if Gemini flagged it as off-topic OR visible text is too thin
+        ru_agg_visible = _visible_len(translated.get('ru', ''))
+        uz_agg_visible = _visible_len(translated.get('uz', ''))
+        if translated.get('reject') or ru_agg_visible < 40 or uz_agg_visible < 40:
+            logger.info(f"Aggregator: blocking post (reject={translated.get('reject')}, ru_vis={ru_agg_visible}, uz_vis={uz_agg_visible}): {url}")
             save_article(url, "", "", "")
             continue
             
@@ -989,7 +1016,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         body = f"{ru_block}\n\n➖➖➖\n\n{uz_block}"
         footer = source_line + channel_line
 
-        combined_caption = body + footer
+        combined_caption = safe_caption(body + footer)
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -1282,8 +1309,23 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         err_str = str(err_str).replace("<", "&lt;").replace(">", "&gt;")
         await update.message.reply_text(f"❌ Системная ошибка ИИ.\n\nТехническая деталь: <code>{err_str}</code>\n\n(Возможно, статья слишком короткая, либо это внутренняя ошибка Gemini API)", parse_mode="HTML")
         return
-        
-    # --- Advanced link extraction for manual posts ---
+
+    # Guard: don't continue if Gemini rejected OR if the actual visible text content is too thin.
+    # IMPORTANT: check _visible_len() not just bool(str) — '⚡ <b></b>\n\n' is truthy but empty!
+    ru_content = translated.get('ru', '')
+    uz_content = translated.get('uz', '')
+    ru_visible = _visible_len(ru_content)
+    uz_visible = _visible_len(uz_content)
+    logger.info(f"Visible text check: ru={ru_visible} chars, uz={uz_visible} chars, reject={translated.get('reject')}")
+
+    if translated.get('reject') or ru_visible < 40 or uz_visible < 40:
+        logger.warning(f"manual_post_handler: blocking post — reject={translated.get('reject')}, ru_vis={ru_visible}, uz_vis={uz_visible}")
+        await update.message.reply_text(
+            "❌ Нейросеть решила, что эта новость не относится к тематике канала — публикация отменена.\n\n"
+            "Тематика канала: CyberLaw, LegalTech, FinTech, AI Legislation."
+        )
+        return
+
     link = ""
     # Support PTB 20+ forward_origin
     if getattr(update.message, 'forward_origin', None) and getattr(update.message.forward_origin, 'type', '') == 'channel':
@@ -1359,7 +1401,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     body = f"{ru_block}\n\n➖➖➖\n\n{uz_block}"
     footer = source_line + channel_line
     
-    caption_combined = body + footer
+    caption_combined = safe_caption(body + footer)
         
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -1412,36 +1454,40 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Handle schema updates where media_type might be None for old articles
             link, text_uz, text_ru, photo_url, media_type = row
             media_type = media_type or "photo"
+
+            # --- Guard: don't publish articles with empty text ---
+            if not text_ru or not text_uz:
+                logger.error(f"Article {article_id} has empty text_ru or text_uz — aborting publish.")
+                await query.edit_message_caption(caption="❌ Статья пустая — нейросеть не смогла её обработать. Отмените и попробуйте снова.", reply_markup=None)
+                return
+
             source_line = f"\n\n🔗 Подробно / Batafsil: {link}" if not link.startswith("manual_") else ""
             channel_line = "\n📢 @aileaderuz"
-            body = f"{text_ru}\n\n{text_uz}"
+            body = f"{text_ru}\n\n➖➖➖\n\n{text_uz}"
             footer = source_line + channel_line
-            
-            pass # no truncation
-            caption_combined = body + footer
-                
-            img_bytes = None
-            if photo_url and photo_url.startswith("http"):
+            caption_combined = safe_caption(body + footer)
+
+            # --- Photo: always go through resolve_photo for proper fallbacks ---
+            # Step 1: if it's a Telegram file_id (not a URL), download it via Bot API
+            final_photo = None
+            if photo_url and not photo_url.startswith("http"):
                 try:
-                    img_bytes = await download_image(photo_url)
+                    tg_file = await context.bot.get_file(photo_url)
+                    final_photo = bytes(await tg_file.download_as_bytearray())
+                    logger.info(f"Downloaded Telegram file_id for publish ({len(final_photo)} bytes)")
                 except Exception as e:
-                    logger.error(f"Image db download failed: {e}")
-            
+                    logger.warning(f"Telegram file_id download failed: {e} — will use resolve_photo fallback")
+
+            # Step 2: resolve_photo handles HTTP URLs, Pollinations AI, and DEFAULT_IMAGE
+            if not final_photo:
+                final_photo = await resolve_photo(photo_url, fallback_prompt="technology law digital news")
+
             try:
-                final_photo = img_bytes if img_bytes else (photo_url if photo_url else DEFAULT_IMAGE)
                 await send_article_media(context, channel_id, final_photo, media_type, caption_combined)
-                await query.edit_message_caption(caption=f"✅ Опубликовано в канал!\n\n{caption_combined}", reply_markup=None, parse_mode="HTML")
+                confirmation = safe_caption(f"✅ Опубликовано в канал!\n\n{caption_combined}", limit=900)
+                await query.edit_message_caption(caption=confirmation, reply_markup=None, parse_mode="HTML")
             except Exception as photo_err:
-                if "Can't use file of type" in str(photo_err) and photo_url and not photo_url.startswith("http"):
-                    try:
-                        tg_file = await context.bot.get_file(photo_url)
-                        downloaded_bytes = bytes(await tg_file.download_as_bytearray())
-                        await send_article_media(context, channel_id, downloaded_bytes, media_type, caption_combined)
-                        await query.edit_message_caption(caption=f"✅ Опубликовано в канал! (через обход Telegram API)\n\n{caption_combined}", reply_markup=None, parse_mode="HTML")
-                        return
-                    except Exception as dl_err:
-                        logger.error(f"Fallback publish download failed: {dl_err}")
-                        
+                logger.error(f"publish_callback send failed: {photo_err}")
                 await query.edit_message_caption(caption=f"❌ Ошибка публикации: {photo_err}", reply_markup=None)
 
 async def fetch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
