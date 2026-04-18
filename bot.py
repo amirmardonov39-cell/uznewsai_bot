@@ -1259,6 +1259,23 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_chat_message(update, context, str(text))
         return
 
+    logger.info("Routing as News Post...")
+
+    # --- Quick pre-filter: reject obviously off-topic content BEFORE calling Gemini ---
+    # This saves API cost and avoids the confusing "processing..." + "rejected" flow.
+    # We only run this if text is substantial enough to be meaningful (>30 chars).
+    if len(str(text)) > 30 and not is_tech_relevant(str(text)):
+        logger.info(f"manual_post_handler: pre-filter rejected (off-topic text).")
+        await update.message.reply_text(
+            "ℹ️ Эта новость не подходит для канала @aileaderuz.\n\n"
+            "Канал публикует только:\n"
+            "• ⚖️ CyberLaw & кибербезопасность\n"
+            "• 🤖 LegalTech & AI-регулирование\n"
+            "• 💰 FinTech & крипто-право\n"
+            "• 📜 Законодательство (Узбекистан, ЕС, США)"
+        )
+        return
+
     logger.info("Replying with status message for News Post...")
     await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
 
@@ -1321,8 +1338,12 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if translated.get('reject') or ru_visible < 40 or uz_visible < 40:
         logger.warning(f"manual_post_handler: blocking post — reject={translated.get('reject')}, ru_vis={ru_visible}, uz_vis={uz_visible}")
         await update.message.reply_text(
-            "❌ Нейросеть решила, что эта новость не относится к тематике канала — публикация отменена.\n\n"
-            "Тематика канала: CyberLaw, LegalTech, FinTech, AI Legislation."
+            "ℹ️ Эта новость не подходит для канала @aileaderuz.\n\n"
+            "Канал публикует только:\n"
+            "• ⚖️ CyberLaw & кибербезопасность\n"
+            "• 🤖 LegalTech & AI-регулирование\n"
+            "• 💰 FinTech & крипто-право\n"
+            "• 📜 Законодательство (Узбекистан, ЕС, США)"
         )
         return
 
