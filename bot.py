@@ -161,7 +161,7 @@ async def send_article_media(context, chat_id, final_photo, media_type, caption_
     """
     # HARD GUARD: never send a post with empty/near-empty visible text
     visible = _visible_len(caption_combined or "")
-    if visible < 80:
+    if visible < 40:
         raise ValueError(f"send_article_media: caption too short ({visible} visible chars) — refusing to send empty post. Caption repr: {repr(caption_combined[:120])}")
 
 
@@ -1357,23 +1357,9 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     logger.info("Routing as News Post...")
 
-    # --- Quick pre-filter: reject obviously off-topic content BEFORE calling Gemini ---
-    # This saves API cost and avoids the confusing "processing..." + "rejected" flow.
-    # We only run this if text is substantial enough to be meaningful (>30 chars).
-    if len(str(text)) > 30 and not is_tech_relevant(str(text)):
-        logger.info(f"manual_post_handler: pre-filter rejected (off-topic text).")
-        await update.message.reply_text(
-            "ℹ️ Эта новость не подходит для канала @aileaderuz.\n\n"
-            "Канал публикует только:\n"
-            "• ⚖️ CyberLaw & кибербезопасность\n"
-            "• 🤖 LegalTech & AI-регулирование\n"
-            "• 💰 FinTech & крипто-право\n"
-            "• 📜 Законодательство (Узбекистан, ЕС, США)"
-        )
-        return
-
     logger.info("Replying with status message for News Post...")
     await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
+
 
     # --- Enrich text: for short messages that are just a URL, fetch full article content ---
     urls_in_text = re.findall(r'(https?://[^\s]+)', str(text))
@@ -1431,17 +1417,16 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     uz_visible = _visible_len(uz_content)
     logger.info(f"Visible text check: ru={ru_visible} chars, uz={uz_visible} chars, reject={translated.get('reject')}")
 
-    if translated.get('reject') or ru_visible < 80 or uz_visible < 80:
-        logger.warning(f"manual_post_handler: blocking post — reject={translated.get('reject')}, ru_vis={ru_visible}, uz_vis={uz_visible}")
+    # In manual mode the ADMIN decides what's relevant.
+    # We only block if Gemini returned literally nothing (API error / empty response).
+    if ru_visible < 40 or uz_visible < 40:
+        logger.warning(f"manual_post_handler: Gemini returned empty content (ru_vis={ru_visible}, uz_vis={uz_visible}) — blocking.")
         await update.message.reply_text(
-            "ℹ️ Эта новость не подходит для канала @aileaderuz.\n\n"
-            "Канал публикует только:\n"
-            "• ⚖️ CyberLaw & кибербезопасность\n"
-            "• 🤖 LegalTech & AI-регулирование\n"
-            "• 💰 FinTech & крипто-право\n"
-            "• 📜 Законодательство (Узбекистан, ЕС, США)"
+            "❌ ИИ не смог обработать эту новость — текст слишком короткий или нечитаемый.\n\n"
+            "Попробуйте переслать полную статью или добавить больше текста."
         )
         return
+
 
     link = ""
     # Support PTB 20+ forward_origin
