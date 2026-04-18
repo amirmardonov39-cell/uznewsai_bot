@@ -404,6 +404,7 @@ SYSTEM_PROMPT = """
 ✓ Конкретные цифры, имена, даты
 ✓ Живой авторский голос — как будто пишешь другу-юристу
 ✓ Каждое предложение несёт новую информацию
+✓ СТРОГО ИСПОЛЬЗУЙ ТОЛЬКО ПРЕДОСТАВЛЕННУЮ ИНФОРМАЦИЮ. ЗАПРЕЩЕНО выдумывать факты (галлюцинировать).
 
 ОТВЕЧАЙ СТРОГО JSON.
 """
@@ -1405,6 +1406,20 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning(f"Could not scrape {target_url} — using original forwarded text instead")
             text = original_text  # fallback to what the user actually sent
 
+    # --- ANTI-HALLUCINATION GUARD ---
+    # If the text is STILL just a URL (or very little text) because scraping failed,
+    # we MUST NOT send it to Gemini, otherwise it will invent a random story from its training data.
+    text_for_gemini_without_urls = re.sub(r'https?://[^\s]+', '', str(text)).strip()
+    if len(text_for_gemini_without_urls) < 30:
+        logger.warning("Aborting: Not enough real text to send to Gemini (preventing hallucination).")
+        await update.message.reply_text(
+            "❌ <b>Недостаточно текста для ИИ-анализа.</b>\n\n"
+            "Бот видит только голую ссылку, а прочитать этот сайт автоматически не удалось (возможно, он закрыт от ботов).\n\n"
+            "Из одной только ссылки нейросеть начинает <b>сочинять и выдумывать</b> несуществующие новости.\n\n"
+            "👉 Пожалуйста, <b>скопируйте текст новости руками</b> и отправьте его сюда вместе со ссылкой.",
+            parse_mode="HTML"
+        )
+        return
 
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
