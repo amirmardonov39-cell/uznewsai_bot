@@ -45,22 +45,78 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_ID = "gemini-2.5-flash-lite"
 
 class TranslatedArticle(BaseModel):
-    emoji: str = Field(description="One highly relevant emoji for the news topic. E.g. ⚖️ for law, 🔐 for cybersecurity, 💰 for fintech, 🤖 for AI/LegalTech", default="⚖️")
-    headline_ru: str = Field(description="Intriguing, attention-grabbing Russian headline with emoji at start. Max 10 words. Must be specific to CyberLaw/LegalTech/FinTech/Legislation topic.", default="")
-    headline_uz: str = Field(description="Same headline translated to Uzbek. Max 10 words.", default="")
-    analysis_ru: str = Field(description="Exactly 2 sentences in Russian. SENTENCE 1: State the core fact crisply (who did what). SENTENCE 2: Human analytical insight — why this matters, what changes, what the reader should think about. Sound like a knowledgeable journalist, not a robot. Max 320 chars total.", default="")
-    analysis_uz: str = Field(description="Exactly 2 sentences in Uzbek, mirroring analysis_ru in meaning and tone. Max 320 chars total.", default="")
-    hashtags: str = Field(description="2-3 narrow niche tags. Must be from: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Huquq #Kriptovalyuta #DataPrivacy #Regulation", default="#CyberLaw #LegalTech")
-    image_prompt: str = Field(description="Short English prompt for a relevant image: courtroom, legal AI, cryptocurrency, cybersecurity", default="cybersecurity law digital justice")
-    reject: bool = Field(description="Set to true ONLY IF the news is completely irrelevant to CyberLaw, LegalTech, FinTech, or AI legislation (e.g. general crimes, sports, random tech, warehouse fires).", default=False)
+    emoji: str = Field(
+        description="One highly relevant emoji for the news topic. ⚖️ law/court, 🔐 cybersecurity/hacking, 💰 fintech/crypto, 🤖 AI/LegalTech, 📜 legislation, 🛡️ data privacy",
+        default="⚖️"
+    )
+    headline_ru: str = Field(
+        description="""
+ПРОФЕССИОНАЛЬНЫЙ заголовок на русском с emoji в начале. Требования:
+- Максимум 12 слов
+- Должен ИНТРИГОВАТЬ: задавать вопрос, называть конкретную цифру, раскрывать конфликт или неожиданный поворот
+- Конкретный факт или имя, никакой воды
+- НЕ начинать с 'Как', 'Почему' — только утверждение или интригующий вопрос
+Пример хорошего: '🔐 США арестовали хакера за кражу $90M у 300 компаний'
+Пример плохого: '🤖 Новые технологии меняют правовую сферу'""",
+        default=""
+    )
+    headline_uz: str = Field(
+        description="""
+Тот же заголовок на НАСТОЯЩЕМ литературном узбекском языке. Правила:
+- НЕ калька с русского, а смысловой перевод
+- Говори как образованный журналист из Ташкента
+- Используй живые узбекские идиомы и конструкции
+- Максимум 12 слов""",
+        default=""
+    )
+    analysis_ru: str = Field(
+        description="""
+АНАЛИТИЧЕСКИЙ ТЕКСТ на русском — ровно 3 предложения:
+ПРЕДЛОЖЕНИЕ 1 (ФАКТ): Кто, что, где, когда — конкретно и ёмко. Цифры, имена, даты.
+ПРЕДЛОЖЕНИЕ 2 (КОНТЕКСТ): Почему это важно, какая backstory, что предшествовало.
+ПРЕДЛОЖЕНИЕ 3 (ВЫВОД/УДАР): Что это меняет для читателя, бизнеса, рынка или права — должно ЗАЦЕПИТЬ.
+Стиль: умный редактор Forbes/РБК — без воды, без клише, без роботизированных фраз.
+Лимит: 420 символов.""",
+        default=""
+    )
+    analysis_uz: str = Field(
+        description="""
+Тот же аналитический текст на НАСТОЯЩЕМ литературном узбекском — ровно 3 предложения.
+ТРЕБОВАНИЯ К ПЕРЕВОДУ (КРИТИЧНО!):
+1. ЗАПРЕЩЁН дословный перевод — это калька и читается ужасно
+2. Переводи СМЫСЛ, а не слова. Используй узбекские обороты и конструкции
+3. Проверяй: звучало бы это естественно из уст ташкентского журналиста?
+4. Термины (AI, blockchain, GDPR) оставляй как есть, но вокруг них строй живые узбекские предложения
+5. НЕ используй: 'muhim', 'dolzarb', 'shubhasiz' как вводные — это штампы
+Лимит: 420 символов.""",
+        default=""
+    )
+    hashtags: str = Field(
+        description="2-3 тега. Только из: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Huquq #Kriptovalyuta #DataPrivacy #Regulation #DigitalLaw",
+        default="#CyberLaw #LegalTech"
+    )
+    image_prompt: str = Field(
+        description="Short English prompt for a relevant thematic image (10-15 words). Be specific: 'judge using AI courtroom digital gavel', 'hacker arrested handcuffs laptop cybercrime'",
+        default="cybersecurity law digital justice courtroom"
+    )
+    reject: bool = Field(
+        description="Set to true ONLY IF the news is completely irrelevant: general crimes without tech angle, sports, entertainment, health, weather, fires, university grades. If in doubt about relevance — set false.",
+        default=False
+    )
 
 def strip_artificial_words(text: str) -> str:
-    """Remove artificial marker words like 'Важно:' and 'Muhim:' from text."""
-    text = re.sub(r'\bВажно:\s*', '', text)
-    text = re.sub(r'\bMuhim:\s*', '', text)
-    text = re.sub(r'\bВАЖНО:\s*', '', text)
-    text = re.sub(r'\bMUHIM:\s*', '', text)
-    return text
+    """Remove robotic filler phrases from AI output."""
+    patterns = [
+        r'\bВажно:\s*', r'\bMuhim:\s*', r'\bВАЖНО:\s*', r'\bMUHIM:\s*',
+        r'\bОтметим,?\s+что\s*', r'\bСледует отметить,?\s*',
+        r'\bСтоит отметить,?\s*', r'\bПо мнению экспертов,?\s*',
+        r'\bЭксперты считают,?\s*', r'\bПо данным\s+\w+,?\s*',
+        r'\bShuni ta.lab qilish kerakki,?\s*', r'\bQo.shimcha qilib aytish kerak,?\s*',
+        r'\bAlbatta,?\s*', r'\bShubhasiz,?\s*', r'\bDolzarb\s+', r'\bMuhim\s+',
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, '', text)
+    return text.strip()
 
 _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
@@ -105,8 +161,9 @@ async def send_article_media(context, chat_id, final_photo, media_type, caption_
     """
     # HARD GUARD: never send a post with empty/near-empty visible text
     visible = _visible_len(caption_combined or "")
-    if visible < 40:
+    if visible < 80:
         raise ValueError(f"send_article_media: caption too short ({visible} visible chars) — refusing to send empty post. Caption repr: {repr(caption_combined[:120])}")
+
 
     caption_safe = safe_caption(caption_combined)
 
@@ -280,39 +337,76 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """Ты — эксперт-аналитик в области LegalTech, киберправа и финтеха.
-Ты пишешь посты для Telegram-канала @aileaderuz.
+SYSTEM_PROMPT = """
+ТЫ — ведущий аналитик и редактор Telegram-канала @aileaderuz.
+Твоя аудитория: юристы, IT-предприниматели, финтех-специалисты и студенты права из Узбекистана.
+Твои образцы: редакторы Forbes, РБК, The Economist — но адаптированные под Telegram.
 
-ТЕМЫ (только эти 4, строго):
-1. Cyber Law & Crimes: киберпреступность, судебные прецеденты, регулирование ИИ
-2. LegalTech & AI: инструменты автоматизации права, ИИ для юристов
-3. FinTech & Law: криптовалюты, цифровые валюты, финансовое регулирование
-4. Legislation: изменения в законах (Узбекистан, ЕС, США) по ИИ и кибербезопасности
+═══════════════════════════════════
+ТЕМЫ КАНАЛА (только эти, строго):
+═══════════════════════════════════
+1. Cyber Law & Crime: атаки, утечки данных, судебные прецеденты, приговоры хакерам
+2. LegalTech & AI: ИИ-инструменты для юристов, автоматизация договоров, AI в судах
+3. FinTech & Crypto Law: регулирование крипты, CBDC, SEC/ЦБ против DeFi, стейблкоины
+4. Законодательство: новые законы об ИИ, кибербезопасности, персданных (UZ/ЕС/США)
 
-ГЛАВНОЕ ПРАВИЛО ДЛЯ analysis_ru / analysis_uz:
-Пиши КАК УМНЫЙ ЧЕЛОВЕК, а не как робот.
-- ПРЕДЛОЖЕНИЕ 1: Чёткий факт — кто, что, когда сделал. Конкретно и ёмко.
-- ПРЕДЛОЖЕНИЕ 2: Живой аналитический комментарий — почему это важно, что это меняет, или какой вопрос это поднимает. Этот комментарий должен ЗАЦЕПИТЬ читателя.
+═══════════════════════════════════
+СТРУКТУРА ТЕКСТА (строго 3 предложения):
+═══════════════════════════════════
+📌 ПРЕДЛОЖЕНИЕ 1 — ФАКТ:
+Кто + что + когда + где + конкретная цифра/имя/название.
+✅ «7 апреля Министерство юстиции США арестовало трёх граждан России по обвинению в краже $230M через ransomware-атаки на 400 компаний.»
+❌ «Произошло важное событие в сфере кибербезопасности.»
 
-ПРАВИЛО ПЕРЕВОДА НА УЗБЕКСКИЙ (СТРОГО):
-Перевод должен быть ЕСТЕСТВЕННЫМ, как говорит образованный эксперт из Ташкента.
-❌ ЗАПРЕЩЁН ДОСЛОВНЫЙ ПЕРЕВОД (калька с русского). 
-Например, вместо "biomeditsina landshaftini o'zgartiradi" (буквально меняет ландшафт) используй смысловой перевод: "biomeditsina sohasida tub burilish yasaydi" или "soha rivojiga ulkan ta'sir ko'rsatadi". Передавай СМЫСЛ, а не слова.
+📌 ПРЕДЛОЖЕНИЕ 2 — КОНТЕКСТ:
+Почему это произошло? Что предшествовало? Какова суть конфликта?
+✅ «Это первое дело, где ФБР использовало блокчейн-аналитику в качестве главного доказательства — суд полностью принял цифровой след транзакций.»
+❌ «Это свидетельствует о росте внимания властей к данной теме.»
 
-ЭТОТ СТИЛЬ — ЗАПРЕЩЁН (скучно и роботообразно):
-❌ «Новый AI-аналитик отслеживает движения 'умных денег'» (без контекста и смысла)
-❌ «Это важное событие в области технологий.»
+📌 ПРЕДЛОЖЕНИЕ 3 — УДАР/ВЫВОД:
+Что это означает для читателя? Как изменится РЫНОК, БИЗНЕС или ПРАВО?
+Должно заставить читателя задуматься или предпринять действие.
+✅ «Если ваша компания хранит данные клиентов без шифрования — теперь это не просто риск репутации, а прямая уголовная ответственность.»
+❌ «Эксперты советуют следить за развитием событий.»
 
-ЭТОТ СТИЛЬ — ПРАВИЛЬНЫЙ (живо и цепляет):
-✅ «7 апреля DOJ США запустил NFED — первое ИИ-ведомство, которое в реальном времени охотится за ransomware и фишинг-атаками. Если у вас есть бизнес в США — пора пересматривать политику кибербезопасности.»
-✅ «SEC и CFTC впервые признали Bitcoin «цифровым товаром», а не ценной бумагой — это открывает дорогу к институциональным инвестициям и снимает правовую неопределённость, мучившую рынок 10 лет.»
+═══════════════════════════════════
+ПРАВИЛА ПЕРЕВОДА НА УЗБЕКСКИЙ — КРИТИЧЕСКИ ВАЖНО:
+═══════════════════════════════════
+ПЕРЕВОД ДОЛЖЕН ЗВУЧАТЬ КАК РЕЧЬ ОБРАЗОВАННОГО ЖУРНАЛИСТА ИЗ ТАШКЕНТА.
 
-headline_ru: Интригующий заголовок RU с эмодзи. Пример: «🔐 Узбекистан строит киберщит: Что изменится с апреля?»
-headline_uz: Тот же заголовок UZ. Пример: «🔐 O'zbekiston kibershit quryapti: Apreldan nima o'zgaradi?»
-hashtags: 2-3 тега из: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Kriptovalyuta #DataPrivacy #Regulation
+❌ ЗАПРЕЩЕНО — дословная калька:
+«global kiberxavfsizlik landshaftini o'zgartiradi» → неестественно
+«muhim qadam qo'yildi» → штамп
+«bu soha uchun jiddiy oqibatlarga olib kelishi mumkin» → канцелярит
 
-ЗАПРЕЩЕНО: медицина, вакцины, война, спорт, развлечения, вводные слова «Важно: / Muhim:», HTML-теги.
-ОТВЕЧАЙ СТРОГО JSON."""
+✅ ПРАВИЛЬНО — живой узбекский:
+«global kiberxavfsizlik tizimiga katta zarba berdi» → естественно
+«bu qaror butun sohani o'zgartirib yuborishi aniq» → живо
+«endi kompaniyalar bu masalani e'tiborsiz qoldirolmaydi» → цепляет
+
+ДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА:
+- Термины (AI, blockchain, GDPR, ransomware, DeFi) НЕ переводи — оставляй как есть
+- Имена людей и организаций транслитерируй: «Yustitsiya vazirligi», «Federal qidiruv byurosi (FBI)"
+- Числа и даты — на узбекском: «7-aprel», «230 million dollar»
+- Избегай слов-паразитов: muhim, dolzarb, shubhasiz, albatta (как вводных)
+
+═══════════════════════════════════
+СТИЛЬ И ЗАПРЕТЫ:
+═══════════════════════════════════
+ЗАПРЕЩЕНО в тексте:
+✗ HTML-теги (<b>, <i>)
+✗ Вводные слова: «Важно:», «Muhim:», «Отметим, что», «Следует отметить»
+✗ Клише: «эксперты считают», «по мнению аналитиков», «в условиях глобализации»
+✗ Общие фразы без конкретики
+✗ Пересказ без анализа
+
+ОБЯЗАТЕЛЬНО:
+✓ Конкретные цифры, имена, даты
+✓ Живой авторский голос — как будто пишешь другу-юристу
+✓ Каждое предложение несёт новую информацию
+
+ОТВЕЧАЙ СТРОГО JSON.
+"""
 
 # Keywords for pre-filter — STRICTLY niche: CyberLaw, LegalTech, FinTech, AI Legislation only
 TECH_KEYWORDS = [
@@ -515,26 +609,29 @@ async def process_and_translate(text_content: str) -> dict:
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         # --- Strict validation: reject if Gemini flagged it OR content is too thin ---
-        # Minimum: headline must be > 5 visible chars, analysis must be > 30 visible chars
-        headline_too_short = len(ru_header_ru) < 5 or len(ru_header_uz) < 5
-        analysis_too_short = len(analysis_ru_raw) < 30 or len(analysis_uz_raw) < 30
+        # Now expecting 3 sentences: headline >10 chars, analysis >80 chars each
+        headline_too_short = len(ru_header_ru) < 10 or len(ru_header_uz) < 10
+        analysis_too_short = len(analysis_ru_raw) < 80 or len(analysis_uz_raw) < 80
         gemini_rejected = bool(data.get('reject'))
 
         if gemini_rejected or headline_too_short or analysis_too_short:
-            reason = "Gemini reject=True" if gemini_rejected else f"content too short (headline={len(ru_header_ru)}, analysis_ru={len(analysis_ru_raw)}, analysis_uz={len(analysis_uz_raw)})"
+            reason = "Gemini reject=True" if gemini_rejected else (
+                f"content too short (headline_ru={len(ru_header_ru)}, headline_uz={len(ru_header_uz)}, "
+                f"analysis_ru={len(analysis_ru_raw)}, analysis_uz={len(analysis_uz_raw)})"
+            )
             logger.warning(f"parse_gemini_json: auto-rejecting — {reason}")
             return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
 
-        # RU block: emoji + bold headline + 1-2 sentence body
+        # RU block: emoji + bold headline + 3-sentence analysis
         ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
-        # UZ block: emoji + bold headline + 1-2 sentence body + hashtags
+        # UZ block: emoji + bold headline + 3-sentence analysis + hashtags
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
 
-        # Final sanity check: visible text length must be meaningful
+        # Final sanity check: visible text must be substantial (raised threshold for 3-sentence format)
         ru_visible = _visible_len(ru_text)
         uz_visible = _visible_len(uz_text)
-        if ru_visible < 40 or uz_visible < 40:
-            logger.warning(f"parse_gemini_json: visible text too short after build (ru={ru_visible}, uz={uz_visible}) — auto-rejecting.")
+        if ru_visible < 80 or uz_visible < 80:
+            logger.warning(f"parse_gemini_json: visible text too short (ru={ru_visible}, uz={uz_visible}) — auto-rejecting.")
             return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
 
         return {
@@ -546,12 +643,11 @@ async def process_and_translate(text_content: str) -> dict:
         }
 
     generator_config = types.GenerateContentConfig(
-        # system_instruction keeps the role separate from the news content
         system_instruction=SYSTEM_PROMPT,
         response_mime_type="application/json",
         response_schema=TranslatedArticle,
-        temperature=0.65,       # slightly more creative = punchier hooks
-        max_output_tokens=1000  # Increased from 300 to accommodate longer 2-sentence analysis
+        temperature=0.75,       # higher creativity = punchier, more engaging copy
+        max_output_tokens=1500  # enough for 3 full sentences in both languages
     )
 
     max_retries = 3
@@ -1335,7 +1431,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     uz_visible = _visible_len(uz_content)
     logger.info(f"Visible text check: ru={ru_visible} chars, uz={uz_visible} chars, reject={translated.get('reject')}")
 
-    if translated.get('reject') or ru_visible < 40 or uz_visible < 40:
+    if translated.get('reject') or ru_visible < 80 or uz_visible < 80:
         logger.warning(f"manual_post_handler: blocking post — reject={translated.get('reject')}, ru_vis={ru_visible}, uz_vis={uz_visible}")
         await update.message.reply_text(
             "ℹ️ Эта новость не подходит для канала @aileaderuz.\n\n"
