@@ -1361,9 +1361,14 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
 
 
-    # --- Enrich text: for short messages that are just a URL, fetch full article content ---
+    # --- Enrich text: only scrape URL if message is TRULY just a URL with no other text ---
     urls_in_text = re.findall(r'(https?://[^\s]+)', str(text))
-    is_just_url = len(str(text).strip()) < 200 and bool(urls_in_text)
+
+    # Always extract source URL before potentially overwriting `text`
+    source_url_for_link = urls_in_text[0] if urls_in_text else ""
+
+    # Save original text — we will NEVER discard it in favour of a failed scrape
+    original_text = str(text)
 
     # YouTube fast-path
     extracted_yt_id = extract_youtube_video_id(str(text))
@@ -1377,28 +1382,29 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if yt_title:
                     logger.info(f"OEmbed YouTube title: {yt_title}")
                     text = f"Видео с YouTube: {yt_title}\nСсылка: {text}"
-                    is_just_url = False
         except Exception as e:
             logger.error(f"Failed to fetch YouTube title via oEmbed: {e}")
 
-    # For all other URLs: scrape the article text
-    # Detect if message is mostly just a URL (few words besides the URL)
+    # Strip URLs to see how much REAL text the user sent
     text_without_urls = re.sub(r'https?://[^\s]+', '', str(text)).strip()
-    is_just_url = bool(urls_in_text) and len(text_without_urls) < 60
 
-    # Always extract source URL before potentially overwriting `text`
-    source_url_for_link = urls_in_text[0] if urls_in_text else ""
+    # Only try scraping if there is genuinely NO text besides the URL (< 30 chars of real content)
+    # If the user sent a forwarded post with meaningful text — use it directly, don't scrape
+    is_bare_url = bool(urls_in_text) and len(text_without_urls) < 30 and not extracted_yt_id
 
-    if is_just_url and not extracted_yt_id and urls_in_text:
+    if is_bare_url and urls_in_text:
         target_url = urls_in_text[0]
-        logger.info(f"Message is a bare URL, fetching article content from: {target_url}")
+        logger.info(f"Message is a bare URL — attempting to scrape article: {target_url}")
         scraped_text = await fetch_article_text(target_url)
         if scraped_text and len(scraped_text) > 80:
             text = scraped_text
-            logger.info(f"Enriched text with scraped article ({len(text)} chars)")
+            logger.info(f"Enriched with scraped article ({len(text)} chars)")
         else:
-            logger.warning(f"Could not scrape article text from {target_url}, using URL as context")
-            text = f"Статья по ссылке: {target_url}"
+            # Scraping failed — keep the ORIGINAL text (even if short), do NOT use "Статья по ссылке: URL"
+            # Sending that to Gemini causes it to hallucinate an unrelated article from training data
+            logger.warning(f"Could not scrape {target_url} — using original forwarded text instead")
+            text = original_text  # fallback to what the user actually sent
+
 
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
