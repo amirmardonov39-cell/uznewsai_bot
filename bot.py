@@ -1640,8 +1640,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"📢 Канал: <code>{channel_id or '❌ не задан'}</code>\n"
         f"📰 Новостей сегодня: <b>{today_count}</b>\n"
         f"📦 Всего в БД: <b>{total_count}</b>\n\n"
-        f"⏰ Автопоиск каждый час\n"
-        f"🔧 /fetch — запустить поиск сейчас"
+        f"🟢 Режим: вручную (автопоиск отключён)\n"
+        f"ℹ️ Перешлите новость прямо в этот чат, бот обработает и готовит публикацию."
     )
     await update.message.reply_text(status_text, parse_mode="HTML")
 
@@ -1658,9 +1658,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(publish_callback, pattern=r"^(pub|cancel|edit)\|.*"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
-    job_queue = app.job_queue
-    # Run every 2 hours; daytime-only check is inside run_aggregator_job
-    job_queue.run_repeating(run_aggregator_job, interval=7200, first=60)
+    # AUTO-AGGREGATOR DISABLED — manual mode only.
+    # The admin sends news directly to the bot; no background fetching.
+    # To re-enable: uncomment the line below.
+    # job_queue.run_repeating(run_aggregator_job, interval=7200, first=60)
 
     logger.info("Bot is running V7 (Hook style, /fetch, /status)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
