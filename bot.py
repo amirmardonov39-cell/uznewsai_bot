@@ -610,9 +610,9 @@ async def process_and_translate(text_content: str) -> dict:
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         # --- Strict validation: reject if Gemini flagged it OR content is too thin ---
-        # Now expecting 3 sentences: headline >10 chars, analysis >80 chars each
-        headline_too_short = len(ru_header_ru) < 10 or len(ru_header_uz) < 10
-        analysis_too_short = len(analysis_ru_raw) < 80 or len(analysis_uz_raw) < 80
+        # Lower thresholds to prevent false positives for short news items
+        headline_too_short = len(ru_header_ru) < 5 or len(ru_header_uz) < 5
+        analysis_too_short = len(analysis_ru_raw) < 40 or len(analysis_uz_raw) < 40
         gemini_rejected = bool(data.get('reject'))
 
         if gemini_rejected or headline_too_short or analysis_too_short:
@@ -628,10 +628,10 @@ async def process_and_translate(text_content: str) -> dict:
         # UZ block: emoji + bold headline + 3-sentence analysis + hashtags
         uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
 
-        # Final sanity check: visible text must be substantial (raised threshold for 3-sentence format)
+        # Final sanity check: visible text must be substantial
         ru_visible = _visible_len(ru_text)
         uz_visible = _visible_len(uz_text)
-        if ru_visible < 80 or uz_visible < 80:
+        if ru_visible < 40 or uz_visible < 40:
             logger.warning(f"parse_gemini_json: visible text too short (ru={ru_visible}, uz={uz_visible}) — auto-rejecting.")
             return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
 
