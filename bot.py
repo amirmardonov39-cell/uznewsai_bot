@@ -11,10 +11,9 @@ import asyncio
 import re
 import urllib.parse
 import httpx
-import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from google import genai
 from google.genai import types
@@ -45,78 +44,64 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_ID = "gemini-2.5-flash-lite"
 
 class TranslatedArticle(BaseModel):
-    emoji: str = Field(
-        description="One highly relevant emoji for the news topic. ⚖️ law/court, 🔐 cybersecurity/hacking, 💰 fintech/crypto, 🤖 AI/LegalTech, 📜 legislation, 🛡️ data privacy",
-        default="⚖️"
-    )
-    headline_ru: str = Field(
-        description="""
-ПРОФЕССИОНАЛЬНЫЙ заголовок на русском с emoji в начале. Требования:
-- Максимум 12 слов
-- Должен ИНТРИГОВАТЬ: задавать вопрос, называть конкретную цифру, раскрывать конфликт или неожиданный поворот
-- Конкретный факт или имя, никакой воды
-- НЕ начинать с 'Как', 'Почему' — только утверждение или интригующий вопрос
-Пример хорошего: '🔐 США арестовали хакера за кражу $90M у 300 компаний'
-Пример плохого: '🤖 Новые технологии меняют правовую сферу'""",
-        default=""
-    )
-    headline_uz: str = Field(
-        description="""
-Тот же заголовок на НАСТОЯЩЕМ литературном узбекском языке. Правила:
-- НЕ калька с русского, а смысловой перевод
-- Говори как образованный журналист из Ташкента
-- Используй живые узбекские идиомы и конструкции
-- Максимум 12 слов""",
-        default=""
-    )
-    analysis_ru: str = Field(
-        description="""
-АНАЛИТИЧЕСКИЙ ТЕКСТ на русском — ровно 3 предложения:
-ПРЕДЛОЖЕНИЕ 1 (ФАКТ): Кто, что, где, когда — конкретно и ёмко. Цифры, имена, даты.
-ПРЕДЛОЖЕНИЕ 2 (КОНТЕКСТ): Почему это важно, какая backstory, что предшествовало.
-ПРЕДЛОЖЕНИЕ 3 (ВЫВОД/УДАР): Что это меняет для читателя, бизнеса, рынка или права — должно ЗАЦЕПИТЬ.
-Стиль: умный редактор Forbes/РБК — без воды, без клише, без роботизированных фраз.
-Лимит: 420 символов.""",
-        default=""
-    )
-    analysis_uz: str = Field(
-        description="""
-Тот же аналитический текст на НАСТОЯЩЕМ литературном узбекском — ровно 3 предложения.
-ТРЕБОВАНИЯ К ПЕРЕВОДУ (КРИТИЧНО!):
-1. ЗАПРЕЩЁН дословный перевод — это калька и читается ужасно
-2. Переводи СМЫСЛ, а не слова. Используй узбекские обороты и конструкции
-3. Проверяй: звучало бы это естественно из уст ташкентского журналиста?
-4. Термины (AI, blockchain, GDPR) оставляй как есть, но вокруг них строй живые узбекские предложения
-5. НЕ используй: 'muhim', 'dolzarb', 'shubhasiz' как вводные — это штампы
-Лимит: 420 символов.""",
-        default=""
-    )
-    hashtags: str = Field(
-        description="2-3 тега. Только из: #CyberLaw #LegalTech #FinTech #AILaw #Kiberjinoyat #Huquq #Kriptovalyuta #DataPrivacy #Regulation #DigitalLaw",
-        default="#CyberLaw #LegalTech"
-    )
-    image_prompt: str = Field(
-        description="Short English prompt for a relevant thematic image (10-15 words). Be specific: 'judge using AI courtroom digital gavel', 'hacker arrested handcuffs laptop cybercrime'",
-        default="cybersecurity law digital justice courtroom"
-    )
-    reject: bool = Field(
-        description="Set to true ONLY IF the news is completely irrelevant: general crimes without tech angle, sports, entertainment, health, weather, fires, university grades. If in doubt about relevance — set false.",
-        default=False
-    )
+    emoji: str = Field(description="One tight, relevant emoji, e.g. ⚡️")
+    headline_ru: str = Field(description="Catchy, natural headline in Russian, max 8 words. NO colons (без двоеточий).")
+    headline_uz: str = Field(description="Catchy, natural headline in Uzbek, max 8 words. NO colons (без двоеточий).")
+    analysis_ru: str = Field(description="STRICTLY 1 sentence IN RUSSIAN with key facts. Write naturally like a human and finish the thought completely. Max 140 characters.")
+    analysis_uz: str = Field(description="STRICTLY 1 sentence IN UZBEK with key facts. Write naturally like a human and finish the thought completely. Max 140 characters.")
+    hashtags: str = Field(description="1-2 narrow tags like #CyberLaw #AI")
+    image_prompt: str = Field(description="Short English prompt for AI image")
 
 def strip_artificial_words(text: str) -> str:
-    """Remove robotic filler phrases from AI output."""
-    patterns = [
-        r'\bВажно:\s*', r'\bMuhim:\s*', r'\bВАЖНО:\s*', r'\bMUHIM:\s*',
-        r'\bОтметим,?\s+что\s*', r'\bСледует отметить,?\s*',
-        r'\bСтоит отметить,?\s*', r'\bПо мнению экспертов,?\s*',
-        r'\bЭксперты считают,?\s*', r'\bПо данным\s+\w+,?\s*',
-        r'\bShuni ta.lab qilish kerakki,?\s*', r'\bQo.shimcha qilib aytish kerak,?\s*',
-        r'\bAlbatta,?\s*', r'\bShubhasiz,?\s*', r'\bDolzarb\s+', r'\bMuhim\s+',
-    ]
-    for pattern in patterns:
-        text = re.sub(pattern, '', text)
-    return text.strip()
+    """Remove artificial marker words like 'Важно:' and 'Muhim:' from text."""
+    text = re.sub(r'\bВажно:\s*', '', text)
+    text = re.sub(r'\bMuhim:\s*', '', text)
+    text = re.sub(r'\bВАЖНО:\s*', '', text)
+    text = re.sub(r'\bMUHIM:\s*', '', text)
+    return text
+
+def force_one_sentence(text: str, max_chars: int = 140) -> str:
+    """
+    HARD enforcement: always returns only the FIRST sentence.
+    No matter what the AI returns — we take exactly one sentence.
+    """
+    if not text:
+        return text
+    text = text.strip()
+    # Split on first sentence-ending punctuation followed by space or end
+    match = re.search(r'([.!?»\"\')])(\s|$)', text)
+    if match:
+        first = text[:match.start() + 1].strip()
+    else:
+        # No punctuation found — take everything up to max_chars
+        first = text
+    # Final hard char limit
+    if len(first) > max_chars:
+        # cut at last space within limit
+        cut = first[:max_chars].rsplit(' ', 1)[0].rstrip()
+        if cut and cut[-1] not in '.!?':
+            cut += '.'
+        first = cut
+    return first
+
+def truncate_to_sentence(text: str, limit: int) -> str:
+    """
+    If text exceeds `limit` chars, cuts at the last complete sentence
+    (ending with . ! ?) within the limit. Never leaves an ellipsis —
+    the result always ends with proper punctuation.
+    """
+    if len(text) <= limit:
+        return text
+    chunk = text[:limit]
+    # Find the last sentence-ending punctuation
+    match = re.search(r'[.!?][^.!?]*$', chunk)
+    if match:
+        return chunk[:match.start() + 1]  # include the punctuation
+    # No sentence boundary found — cut at last space and add a period
+    cut = chunk.rsplit(' ', 1)[0].rstrip()
+    if cut and cut[-1] not in '.!?':
+        cut += '.'
+    return cut
 
 _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
@@ -151,43 +136,54 @@ def safe_caption(text: str, limit: int = 1024) -> str:
     # Strip HTML from body and truncate at last sentence boundary
     body_plain = _HTML_TAG_RE.sub('', body)
     if len(body_plain) > body_limit:
-        return body_plain[:body_limit] + "..." + footer
+        body_plain = truncate_to_sentence(body_plain, body_limit)
 
     return body_plain + footer
 
 async def send_article_media(context, chat_id, final_photo, media_type, caption_combined, keyboard=None):
-    """Sends photo/video with caption. Falls back to text-only if any photo step fails.
-    Raises ValueError if caption has no meaningful visible content (last line of defense).
-    """
-    # HARD GUARD: never send a post with empty/near-empty visible text
-    visible = _visible_len(caption_combined or "")
-    if visible < 40:
-        raise ValueError(f"send_article_media: caption too short ({visible} visible chars) — refusing to send empty post. Caption repr: {repr(caption_combined[:120])}")
-
-
-    caption_safe = safe_caption(caption_combined)
+    """Sends photo/video with caption. Falls back to text-only if any photo step fails."""
 
     async def _send_photo(photo):
         if not photo:  # None or empty bytes — don't even try
             return None
-        if media_type == "video" and isinstance(photo, str) and not photo.startswith("http"):
-            return await context.bot.send_video(
-                chat_id=chat_id, video=photo,
-                caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
-            )
-        return await context.bot.send_photo(
-            chat_id=chat_id, photo=photo,
-            caption=caption_safe, reply_markup=keyboard, parse_mode="HTML"
-        )
+            
+        # Wrap raw bytes in InputFile with a filename so Telegram API accepts it
+        if isinstance(photo, bytes):
+            filename = "media.jpg"
+            if media_type == "video": filename = "media.mp4"
+            elif media_type == "document": filename = "document.file"
+            elif media_type == "audio": filename = "audio.mp3"
+            elif media_type == "voice": filename = "voice.ogg"
+            elif media_type == "animation": filename = "animation.mp4"
+            photo_to_send = InputFile(photo, filename=filename)
+        else:
+            photo_to_send = photo
+            
+        safe_cap = safe_caption(caption_combined, limit=1024)
+        
+        # Dynamically dispatch to the right Telegram method based on media_type
+        if media_type == "video":
+            return await context.bot.send_video(chat_id=chat_id, video=photo_to_send, caption=safe_cap, reply_markup=keyboard, parse_mode="HTML")
+        elif media_type == "document":
+            return await context.bot.send_document(chat_id=chat_id, document=photo_to_send, caption=safe_cap, reply_markup=keyboard, parse_mode="HTML")
+        elif media_type == "audio":
+            return await context.bot.send_audio(chat_id=chat_id, audio=photo_to_send, caption=safe_cap, reply_markup=keyboard, parse_mode="HTML")
+        elif media_type == "voice":
+            return await context.bot.send_voice(chat_id=chat_id, voice=photo_to_send, caption=safe_cap, reply_markup=keyboard, parse_mode="HTML")
+        elif media_type == "animation":
+            return await context.bot.send_animation(chat_id=chat_id, animation=photo_to_send, caption=safe_cap, reply_markup=keyboard, parse_mode="HTML")
+        else:
+            return await context.bot.send_photo(chat_id=chat_id, photo=photo_to_send, caption=safe_cap, reply_markup=keyboard, parse_mode="HTML")
 
     async def _send_text_only():
         """Always works — disable_web_page_preview prevents Telegram from fetching URLs in caption."""
+        safe_cap = safe_caption(caption_combined, limit=4000)
         return await context.bot.send_message(
             chat_id=chat_id,
-            text=caption_safe,
+            text=safe_cap,
             reply_markup=keyboard,
             parse_mode="HTML",
-            disable_web_page_preview=True,
+            disable_web_page_preview=False,
         )
 
     # If no photo provided, go straight to text-only
@@ -337,114 +333,63 @@ def save_article(link: str, text_uz: str, text_ru: str, photo_url: str, media_ty
     finally:
         conn.close()
 
-SYSTEM_PROMPT = """
-ТЫ — ведущий аналитик и редактор Telegram-канала @aileaderuz.
-Твоя аудитория: юристы, IT-предприниматели, финтех-специалисты и студенты права из Узбекистана.
-Твои образцы: редакторы Forbes, РБК, The Economist — но адаптированные под Telegram.
+SYSTEM_PROMPT = """Role: Ты — эксперт-аналитик в области LegalTech, киберправа и финтеха. Твоя задача — формировать краткие новостные сводки по открытым источникам.
 
-═══════════════════════════════════
-ТЕМЫ КАНАЛА (только эти, строго):
-═══════════════════════════════════
-1. Cyber Law & Crime: атаки, утечки данных, судебные прецеденты, приговоры хакерам
-2. LegalTech & AI: ИИ-инструменты для юристов, автоматизация договоров, AI в судах
-3. FinTech & Crypto Law: регулирование крипты, CBDC, SEC/ЦБ против DeFi, стейблкоины
-4. Законодательство: новые законы об ИИ, кибербезопасности, персданных (UZ/ЕС/США)
+Task: Выдели самое главное из текста. Пиши только ключевые факты про суть новости, как живой человек, естественно и грамотно.
+Темы:
+- Cyber Law & Crimes: Киберпреступность, регулирование ИИ.
+- LegalTech & AI: Автоматизация права, ИИ для юристов.
+- FinTech & Law: Криптовалюты, цифровой сум.
 
-═══════════════════════════════════
-СТРУКТУРА ТЕКСТА (строго 3 предложения):
-═══════════════════════════════════
-📌 ПРЕДЛОЖЕНИЕ 1 — ФАКТ:
-Кто + что + когда + где + конкретная цифра/имя/название.
-✅ «7 апреля Министерство юстиции США арестовало трёх граждан России по обвинению в краже $230M через ransomware-атаки на 400 компаний.»
-❌ «Произошло важное событие в сфере кибербезопасности.»
+Constraints:
+1. Выжимай суть (факт + интрига) СТРОГО в 1 (одно) предложение. Дописывай мысль до конца, не обрывай текст. analysis_ru пиши СТРОГО на русском, analysis_uz СТРОГО на узбекском. Максимум 200 символов на каждый язык.
+2. Придумай привлекательный, естественный заголовок (headline_ru, headline_uz) до 10 слов. КАТЕГОРИЧЕСКИ ЗАПРЕЩАЕТСЯ использовать двоеточия (:) в заголовках.
+3. Узбекский текст (headline_uz и analysis_uz) ДОЛЖЕН БЫТЬ БЕЗУПРЕЧНЫМ по смыслу и стилистике. Используй абсолютно естественный, грамотный и профессиональный узбекский язык (sof va ravon o'zbek tilida, xatosiz). Правильно переводи термины (ЦБ -> Markaziy bank, НАПП -> NAPP). Сохраняй полный смысл оригинальной новости. Не должно быть корявого машинного перевода (masalan, "so'ramasdan", "ijaraga oldi" ўрнига чиройлироқ сўзлар топинг).
 
-📌 ПРЕДЛОЖЕНИЕ 2 — КОНТЕКСТ:
-Почему это произошло? Что предшествовало? Какова суть конфликта?
-✅ «Это первое дело, где ФБР использовало блокчейн-аналитику в качестве главного доказательства — суд полностью принял цифровой след транзакций.»
-❌ «Это свидетельствует о росте внимания властей к данной теме.»
+ОТВЕЧАЙ СТРОГО JSON. Никаких HTML тегов внутри полей."""
 
-📌 ПРЕДЛОЖЕНИЕ 3 — УДАР/ВЫВОД:
-Что это означает для читателя? Как изменится РЫНОК, БИЗНЕС или ПРАВО?
-Должно заставить читателя задуматься или предпринять действие.
-✅ «Если ваша компания хранит данные клиентов без шифрования — теперь это не просто риск репутации, а прямая уголовная ответственность.»
-❌ «Эксперты советуют следить за развитием событий.»
-
-═══════════════════════════════════
-ПРАВИЛА ПЕРЕВОДА НА УЗБЕКСКИЙ — КРИТИЧЕСКИ ВАЖНО:
-═══════════════════════════════════
-ПЕРЕВОД ДОЛЖЕН ЗВУЧАТЬ КАК РЕЧЬ ОБРАЗОВАННОГО ЖУРНАЛИСТА ИЗ ТАШКЕНТА.
-
-❌ ЗАПРЕЩЕНО — дословная калька:
-«global kiberxavfsizlik landshaftini o'zgartiradi» → неестественно
-«muhim qadam qo'yildi» → штамп
-«bu soha uchun jiddiy oqibatlarga olib kelishi mumkin» → канцелярит
-
-✅ ПРАВИЛЬНО — живой узбекский:
-«global kiberxavfsizlik tizimiga katta zarba berdi» → естественно
-«bu qaror butun sohani o'zgartirib yuborishi aniq» → живо
-«endi kompaniyalar bu masalani e'tiborsiz qoldirolmaydi» → цепляет
-
-ДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА:
-- Термины (AI, blockchain, GDPR, ransomware, DeFi) НЕ переводи — оставляй как есть
-- Имена людей и организаций транслитерируй: «Yustitsiya vazirligi», «Federal qidiruv byurosi (FBI)"
-- Числа и даты — на узбекском: «7-aprel», «230 million dollar»
-- Избегай слов-паразитов: muhim, dolzarb, shubhasiz, albatta (как вводных)
-
-═══════════════════════════════════
-СТИЛЬ И ЗАПРЕТЫ:
-═══════════════════════════════════
-ЗАПРЕЩЕНО в тексте:
-✗ HTML-теги (<b>, <i>)
-✗ Вводные слова: «Важно:», «Muhim:», «Отметим, что», «Следует отметить»
-✗ Клише: «эксперты считают», «по мнению аналитиков», «в условиях глобализации»
-✗ Общие фразы без конкретики
-✗ Пересказ без анализа
-
-ОБЯЗАТЕЛЬНО:
-✓ Конкретные цифры, имена, даты
-✓ Живой авторский голос — как будто пишешь другу-юристу
-✓ Каждое предложение несёт новую информацию
-✓ СТРОГО ИСПОЛЬЗУЙ ТОЛЬКО ПРЕДОСТАВЛЕННУЮ ИНФОРМАЦИЮ. ЗАПРЕЩЕНО выдумывать факты (галлюцинировать).
-
-ОТВЕЧАЙ СТРОГО JSON.
-"""
-
-# Keywords for pre-filter — STRICTLY niche: CyberLaw, LegalTech, FinTech, AI Legislation only
+# Keywords for pre-filter: AI, tech, fintech, law, grants, events
 TECH_KEYWORDS = [
-    # --- Cyber Law & Cybercrime ---
-    "cybercrime", "cyber crime", "cyberattack", "cyber attack", "ransomware",
-    "phishing", "malware", "data breach", "hacker", "hacking", "exploit",
-    "cybersecurity law", "cyber law", "киберпреступ", "кибератак", "кибербезопасност",
-    "утечка данных", "хакер", "ransomware", "фишинг", "вредоносн",
-    "cyberjinoyat", "kiberhujum", "kiberxavfsizlik",
-    # --- AI Regulation & Law ---
-    "ai regulation", "ai law", "ai act", "ai policy", "artificial intelligence law",
-    "ai governance", "ai ethics", "ai liability", "ai court",
-    "regulation of ai", "eu ai act", "ai legislation",
-    "регулирование ии", "закон об ии", "ии регулиров", "искусственный интеллект закон",
-    "si qonun", "sun'iy intellekt qonun",
-    # --- LegalTech ---
-    "legaltech", "legal tech", "legal ai", "ai lawyer", "ai legal",
-    "contract automation", "legal automation", "law firm ai", "legal chatbot",
-    "юридическ", "юрист", "legaltech", "правовой ии", "суд", "судебн",
-    "yurist", "huquqiy", "sud",
-    # --- Data Privacy & GDPR ---
-    "gdpr", "data privacy", "data protection", "privacy law", "personal data",
-    "персональные данные", "защита данных", "конфиденциальность",
-    "shaxsiy ma'lumot", "maxfiylik",
-    # --- FinTech & Crypto Regulation ---
-    "fintech", "crypto regulation", "cryptocurrency law", "blockchain law",
-    "bitcoin regulation", "stablecoin", "cbdc", "digital currency law",
-    "defi regulation", "sec crypto", "cftc", "crypto lawsuit",
-    "цифровой сум", "цифровой рубль", "криптовалют", "крипто регулиров",
-    "блокчейн закон", "финтех", "цифровая валюта",
-    "raqamli so'm", "kriptovalyuta", "blokcheyn",
-    # --- Legislation: Uzbekistan / EU / USA ---
-    "cybersecurity strategy", "national ai policy", "ai framework",
-    "cybersecurity act", "cyber resilience act",
-    "стратегия кибербезопасности", "цифровизац", "цифровой узбекистан",
-    "digital uzbekistan", "it-park uzbekistan", "o'zbekiston raqamli",
-    "kiberhavfsizlik strategiyasi",
+    # --- AI / ML ---
+    "ai", "artificial intelligence", "machine learning", "deep learning",
+    "neural", "llm", "gpt", "agi", "openai", "chatgpt", "deepseek",
+    "anthropic", "claude", "gemini", "copilot", "mistral", "llama",
+    "нейро", "искусственный интеллект", "ии", "генеративн",
+    # --- Tech general ---
+    "tech", "software", "hardware", "startup", "robot", "automation",
+    "cloud", "data", "algorithm", "gpu", "chip", "semiconductor",
+    "open source", "api", "model", "benchmark", "programming", "developer",
+    "digital", "internet", "5g", "quantum", "cybersecurity", "hack",
+    "технолог", "программ", "кибербезопасность", "разработ", "цифров",
+    "стартап", "приложени", "платформ",
+    # --- Big Tech ---
+    "apple", "google", "microsoft", "meta", "nvidia", "tesla",
+    "amazon", "openai", "huawei", "samsung",
+    # --- Fintech / Crypto ---
+    "fintech", "blockchain", "crypto", "bitcoin", "ethereum",
+    "defi", "nft", "cbdc", "цифровой рубль", "цифровой сум",
+    "payment", "banking", "neobank", "invest", "venture", "ipo",
+    "финтех", "блокчейн", "криптовалют", "инвестиц",
+    # --- Legal / Regulation ---
+    "regulation", "policy", "law", "legal", "compliance", "gdpr",
+    "legislation", "court", "lawsuit", "fine", "ban", "privacy",
+    "закон", "право", "регулиров", "суд", "штраф", "юридич",
+    "персональные данные", "защита данных", "qonun", "huquq",
+    # --- Grants & Funding ---
+    "grant", "funding", "гранты", "грант", "финансиров",
+    "innovation fund", "инновационный фонд", "it-park",
+    "fellowship", "scholarship", "стипендия", "конкурс",
+    "accelerator", "incubator", "акселератор", "инкубатор",
+    "seed", "series a", "series b", "pre-seed",
+    # --- Events & Conferences ---
+    "conference", "summit", "forum", "expo", "exhibition", "hackathon",
+    "workshop", "webinar", "meetup", "gitex", "ces", "web summit",
+    "конференц", "выставка", "форум", "хакатон", "вебинар",
+    "мероприятие", "event", "techcrunch disrupt", "innovate",
+    # --- Uzbekistan / CIS specific ---
+    "uzbekistan", "узбекистан", "digital uzbekistan", "цифровизац",
+    "silicon", "hub", "it park", "astana hub", "skolkovo",
+    "ташкент", "tashkent", "самарканд", "samarkand",
 ]
 
 # Keywords that signal PURE political/military/geopolitical news (no tech angle)
@@ -507,8 +452,7 @@ def is_tech_relevant(text: str) -> bool:
 # Telegram accepts only these image formats
 _ACCEPTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
-
-async def download_image(url: str, timeout: int = 20, min_size: int = 5000) -> bytes:
+async def download_image(url: str, timeout: int = 20, min_size: int = 1000) -> bytes:
     """Downloads an image, validates it's a raster format Telegram accepts. Returns b'' on failure."""
     if not url or not url.startswith("http"):
         return b""
@@ -544,39 +488,31 @@ async def download_image(url: str, timeout: int = 20, min_size: int = 5000) -> b
         logger.error(f"Failed to download image {url}: {e}")
         return b""
 
-async def resolve_photo(photo_url: str, fallback_prompt: str = "cybersecurity law digital") -> object:
+async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news digital") -> object:
     """
-    ALWAYS returns an image — never None.
-    Priority: og:image bytes -> Pollinations AI -> DEFAULT_IMAGE bytes
+    Download and validate a photo for Telegram.
+    Returns: bytes (valid image) | Telegram file_id str | None (no image — send text-only)
+    NEVER uses AI-generated images. NEVER returns a raw http URL.
     """
-    # Telegram file_id (not a URL) — use directly
-    if photo_url and not photo_url.startswith("http"):
-        return photo_url
+    if not photo_url:
+        photo_url = get_thematic_image(fallback_prompt)
 
-    # Step 1: Try the real article og:image
-    if photo_url and photo_url.startswith("http"):
-        img_bytes = await download_image(photo_url, timeout=15, min_size=3000)
-        if img_bytes:
-            logger.info(f"Photo OK from og:image ({len(img_bytes)} bytes)")
-            return img_bytes
-        logger.warning(f"og:image failed: {photo_url[:60]} — trying AI fallback")
+    if not photo_url.startswith("http"):
+        return photo_url  # Telegram file_id — valid as-is
 
-    # Step 2: Pollinations AI image (free, no API key, topical)
-    try:
-        ai_url = get_thematic_image(fallback_prompt)
-        logger.info(f"Trying Pollinations AI image: {ai_url[:80]}")
-        ai_bytes = await download_image(ai_url, timeout=30, min_size=500)
-        if ai_bytes:
-            logger.info(f"Pollinations AI photo OK ({len(ai_bytes)} bytes)")
-            return ai_bytes
-        logger.warning("Pollinations returned empty/invalid image")
-    except Exception as e:
-        logger.error(f"Pollinations error: {e}")
+    # Download and validate the real image
+    img_bytes = await download_image(photo_url)
+    if img_bytes:
+        return img_bytes
 
-    # Step 3: Absolute last resort — static image
-    logger.warning("Using DEFAULT_IMAGE as last resort")
-    default_bytes = await download_image(DEFAULT_IMAGE, timeout=10, min_size=100)
-    return default_bytes if default_bytes else None
+    logger.warning(f"Image download failed or rejected: {photo_url} — attempting fallback")
+    fallback_url = get_thematic_image(fallback_prompt)
+    if photo_url != fallback_url:
+        img_bytes_fallback = await download_image(fallback_url)
+        if img_bytes_fallback:
+            return img_bytes_fallback
+
+    return None
 
 async def process_and_translate(text_content: str) -> dict:
     # Limit input to avoid huge prompts
@@ -584,13 +520,7 @@ async def process_and_translate(text_content: str) -> dict:
 
     def parse_gemini_json(response_text: str) -> dict:
         try:
-            # Strip markdown code blocks that Gemini sometimes wraps around JSON
-            text = response_text.strip()
-            if text.startswith("```"):
-                text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
-                text = re.sub(r'\s*```\s*$', '', text, flags=re.MULTILINE)
-                text = text.strip()
-            data = json.loads(text)
+            data = json.loads(response_text)
         except Exception:
             return {"error": f"JSON Decode Error: {response_text}"}
             
@@ -598,57 +528,41 @@ async def process_and_translate(text_content: str) -> dict:
         if emoji.strip() in ("🚫", "\U0001F6AB"):
             emoji = "⚡️"
 
-        ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ru_header_ru = strip_artificial_words((data.get('headline_ru') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(":", " -")
+        ru_header_uz = strip_artificial_words((data.get('headline_uz') or '').strip()).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(":", " -")
 
         analysis_ru_raw = strip_artificial_words((data.get('analysis_ru') or '').strip())
         analysis_ru_raw = analysis_ru_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        analysis_ru_raw = force_one_sentence(analysis_ru_raw, 250)
 
         analysis_uz_raw = strip_artificial_words((data.get('analysis_uz') or '').strip())
         analysis_uz_raw = analysis_uz_raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        analysis_uz_raw = force_one_sentence(analysis_uz_raw, 250)
 
         hashtags = (data.get('hashtags') or '#TechNews').strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # --- Strict validation: reject if Gemini flagged it OR content is too thin ---
-        # Lower thresholds to prevent false positives for short news items
-        headline_too_short = len(ru_header_ru) < 5 or len(ru_header_uz) < 5
-        analysis_too_short = len(analysis_ru_raw) < 40 or len(analysis_uz_raw) < 40
-        gemini_rejected = bool(data.get('reject'))
+        ru_text = f"{emoji} <b>{ru_header_ru}</b>\n{analysis_ru_raw}"
+        uz_text = f"{emoji} <b>{ru_header_uz}</b>\n{analysis_uz_raw}\n\n🏷 {hashtags}"
 
-        if gemini_rejected or headline_too_short or analysis_too_short:
-            reason = "Gemini reject=True" if gemini_rejected else (
-                f"content too short (headline_ru={len(ru_header_ru)}, headline_uz={len(ru_header_uz)}, "
-                f"analysis_ru={len(analysis_ru_raw)}, analysis_uz={len(analysis_uz_raw)})"
-            )
-            logger.warning(f"parse_gemini_json: auto-rejecting — {reason}")
-            return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
+        if not ru_header_ru and not analysis_ru_raw:
+            return {"error": "AI is refusing to process this text (possibly due to safety filters or insufficient content)."}
 
-        # RU block: emoji + bold headline + 3-sentence analysis
-        ru_text = f"{emoji} <b>{ru_header_ru}</b>\n\n{analysis_ru_raw}"
-        # UZ block: emoji + bold headline + 3-sentence analysis + hashtags
-        uz_text = f"{emoji} <b>{ru_header_uz}</b>\n\n{analysis_uz_raw}\n\n🏷 {hashtags}"
-
-        # Final sanity check: visible text must be substantial
-        ru_visible = _visible_len(ru_text)
-        uz_visible = _visible_len(uz_text)
-        if ru_visible < 40 or uz_visible < 40:
-            logger.warning(f"parse_gemini_json: visible text too short (ru={ru_visible}, uz={uz_visible}) — auto-rejecting.")
-            return {"reject": True, "ru": "", "uz": "", "title_ru": "", "image_prompt": ""}
+        logger.info(f"Final RU analysis ({len(analysis_ru_raw)} chars): {analysis_ru_raw}")
 
         return {
             "ru": ru_text,
             "uz": uz_text,
             "title_ru": ru_header_ru,
-            "image_prompt": (data.get('image_prompt') or 'cybersecurity law courtroom digital').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-            "reject": False  # explicitly False since we passed all checks
+            "image_prompt": (data.get('image_prompt') or 'digital technology ai').replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         }
 
     generator_config = types.GenerateContentConfig(
+        # system_instruction keeps the role separate from the news content
         system_instruction=SYSTEM_PROMPT,
         response_mime_type="application/json",
         response_schema=TranslatedArticle,
-        temperature=0.75,       # higher creativity = punchier, more engaging copy
-        max_output_tokens=1500  # enough for 3 full sentences in both languages
+        temperature=0.65,       # slightly more creative = punchier hooks
+        max_output_tokens=300   # physically impossible to write a novel with 300 tokens
     )
 
     max_retries = 3
@@ -757,13 +671,13 @@ SOURCES = {
     ]
 }
 
-DEFAULT_IMAGE = "https://telegra.ph/file/55de2abdf5e6e3d7c56dc.jpg"
+DEFAULT_IMAGE = "https://image.pollinations.ai/prompt/technology%20news%20digital?width=1280&height=720&nologo=true"
 
 def get_thematic_image(prompt: str) -> str:
-    """Fallback: generates a themed AI image via Pollinations.ai (free, no API key)."""
+    """Fallback if no original image is found. Generates an AI image via Pollinations.ai"""
     safe_prompt = urllib.parse.quote(prompt.strip())
-    seed = random.randint(1, 99999)
-    return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true&seed={seed}"
+    # Free, instant AI image generation without API key
+    return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true"
 
 async def extract_og_image(url: str) -> str:
     """Scrapes the original source URL for an OpenGraph or Twitter image."""
@@ -771,7 +685,11 @@ async def extract_og_image(url: str) -> str:
         return None
     try:
         # Avoid blocking by using a standard user agent
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5"
+        }
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
@@ -994,23 +912,7 @@ def fetch_latest_news():
     logger.info(f"Total raw items: {len(news_items)} from {len(tg_buckets)} TG channels + {len(rss_buckets)} RSS feeds")
     return news_items
 
-def is_daytime_tashkent() -> bool:
-    """
-    Returns True if current time is within working hours in Tashkent (UTC+5).
-    Working hours: 09:00 – 23:00. No posts at night.
-    """
-    tashkent_tz = datetime.timezone(datetime.timedelta(hours=5))
-    now = datetime.datetime.now(tz=tashkent_tz)
-    return 9 <= now.hour < 23
-
 async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
-    # Night-time guard: 09:00–23:00 Tashkent (UTC+5) only
-    if not is_daytime_tashkent():
-        tashkent_tz = datetime.timezone(datetime.timedelta(hours=5))
-        now = datetime.datetime.now(tz=tashkent_tz)
-        logger.info(f"Night-time in Tashkent ({now.strftime('%H:%M')}) — aggregator skipped.")
-        return
-
     channel_id = get_publish_channel()
     admin_id = get_admin_chat()
     
@@ -1022,17 +924,16 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info("Running aggregator job...")
-
     
-    # Check daily limit (max 5 per day)
+    # Check daily limit (max 30 per day)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != '' AND link NOT LIKE 'manual_%'")
     count_today = cursor.fetchone()[0]
     conn.close()
     
-    if count_today >= 5:
-        logger.info("Daily limit of 5 articles reached. Skipping fetch.")
+    if count_today >= 30:
+        logger.info("Daily limit of 30 articles reached. Skipping fetch.")
         return
 
     news_items = await asyncio.to_thread(fetch_latest_news)
@@ -1078,11 +979,9 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Translation failed for {url}: {translated}")
             continue
 
-        # Skip if Gemini flagged it as off-topic OR visible text is too thin
-        ru_agg_visible = _visible_len(translated.get('ru', ''))
-        uz_agg_visible = _visible_len(translated.get('uz', ''))
-        if translated.get('reject') or ru_agg_visible < 40 or uz_agg_visible < 40:
-            logger.info(f"Aggregator: blocking post (reject={translated.get('reject')}, ru_vis={ru_agg_visible}, uz_vis={uz_agg_visible}): {url}")
+        # Skip if Gemini flagged it as off-topic (title starts with 🚫)
+        if translated.get('title_ru', '').startswith('🚫'):
+            logger.info(f"Gemini flagged item as off-topic: {url}")
             save_article(url, "", "", "")
             continue
             
@@ -1105,15 +1004,14 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Duplicate or save error for {url}")
             continue
             
-        # Format: RU block → divider → UZ block → one source line → channel
-        ru_block = translated['ru']
-        uz_block = translated['uz']
-        source_line = f"\n\n🔗 Подробно / Batafsil: {url}" if not url.startswith("manual_") else ""
-        channel_line = "\n📢 @aileaderuz"
-        body = f"{ru_block}\n\n➖➖➖\n\n{uz_block}"
-        footer = source_line + channel_line
+        # 3. Send preview to Admin for review
+        body = f"{translated['ru']}\n\n{translated['uz']}"
+        footer = ""
+        if not url.startswith("manual_"):
+            footer += f"\n\n🔗 Подробно / Batafsil: {url}"
+        footer += "\n📢 @aileaderuz"
 
-        combined_caption = safe_caption(body + footer)
+        combined_caption = body + footer
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -1284,8 +1182,8 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     return
                     
                 emoji = data.get("emoji", "⚡️")
-                ru_head_ru = data.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                ru_head_uz = data.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                ru_head_ru = data.get("headline_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(":", " -")
+                ru_head_uz = data.get("headline_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(":", " -")
                 a_ru = data.get("analysis_ru", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 a_uz = data.get("analysis_uz", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 h_tags = data.get("hashtags", "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1302,7 +1200,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 conn.commit()
                 conn.close()
                 
-                photo_url = row[0] if row else DEFAULT_IMAGE
+                photo_url = row[0] if row else None
                 media_type = row[1] if row and len(row) > 1 and row[1] else "photo"
                 
                 caption_ru = f"🇷🇺 <b>НОВАЯ НОВОСТЬ ДЛЯ ПУБЛИКАЦИИ:</b>\n\n{new_ru}"
@@ -1338,7 +1236,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     urls_for_intent = re.findall(r'(https?://[^\s]+)', str(text))
     # It is a news submission IF:
     # 1. Contains a link, OR
-    # 2. Has media (photo/video/document), OR
+    # 2. Has media (photo/video/document/audio/voice/animation), OR
     # 3. Was forwarded from somewhere, OR
     # 4. Text is very long (> 150 chars)
     is_news = (
@@ -1346,6 +1244,9 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         bool(getattr(msg, 'photo', None)) or 
         bool(getattr(msg, 'video', None)) or 
         bool(getattr(msg, 'document', None)) or 
+        bool(getattr(msg, 'audio', None)) or 
+        bool(getattr(msg, 'voice', None)) or 
+        bool(getattr(msg, 'animation', None)) or 
         bool(getattr(msg, 'forward_origin', None)) or
         bool(getattr(msg, 'forward_from_chat', None)) or
         len(str(text)) > 150
@@ -1356,20 +1257,12 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_chat_message(update, context, str(text))
         return
 
-    logger.info("Routing as News Post...")
-
     logger.info("Replying with status message for News Post...")
-    await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
+    await update.message.reply_text("⏳ Обрабатываю новую новость (версия 3 с файлами)...")
 
-
-    # --- Enrich text: only scrape URL if message is TRULY just a URL with no other text ---
+    # --- Enrich text: for short messages that are just a URL, fetch full article content ---
     urls_in_text = re.findall(r'(https?://[^\s]+)', str(text))
-
-    # Always extract source URL before potentially overwriting `text`
-    source_url_for_link = urls_in_text[0] if urls_in_text else ""
-
-    # Save original text — we will NEVER discard it in favour of a failed scrape
-    original_text = str(text)
+    is_just_url = len(str(text).strip()) < 200 and bool(urls_in_text)
 
     # YouTube fast-path
     extracted_yt_id = extract_youtube_video_id(str(text))
@@ -1383,43 +1276,28 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if yt_title:
                     logger.info(f"OEmbed YouTube title: {yt_title}")
                     text = f"Видео с YouTube: {yt_title}\nСсылка: {text}"
+                    is_just_url = False
         except Exception as e:
             logger.error(f"Failed to fetch YouTube title via oEmbed: {e}")
 
-    # Strip URLs to see how much REAL text the user sent
+    # For all other URLs: scrape the article text
+    # Detect if message is mostly just a URL (few words besides the URL)
     text_without_urls = re.sub(r'https?://[^\s]+', '', str(text)).strip()
+    is_just_url = bool(urls_in_text) and len(text_without_urls) < 60
 
-    # Only try scraping if there is genuinely NO text besides the URL (< 30 chars of real content)
-    # If the user sent a forwarded post with meaningful text — use it directly, don't scrape
-    is_bare_url = bool(urls_in_text) and len(text_without_urls) < 30 and not extracted_yt_id
+    # Always extract source URL before potentially overwriting `text`
+    source_url_for_link = urls_in_text[0] if urls_in_text else ""
 
-    if is_bare_url and urls_in_text:
+    if is_just_url and not extracted_yt_id and urls_in_text:
         target_url = urls_in_text[0]
-        logger.info(f"Message is a bare URL — attempting to scrape article: {target_url}")
+        logger.info(f"Message is a bare URL, fetching article content from: {target_url}")
         scraped_text = await fetch_article_text(target_url)
         if scraped_text and len(scraped_text) > 80:
             text = scraped_text
-            logger.info(f"Enriched with scraped article ({len(text)} chars)")
+            logger.info(f"Enriched text with scraped article ({len(text)} chars)")
         else:
-            # Scraping failed — keep the ORIGINAL text (even if short), do NOT use "Статья по ссылке: URL"
-            # Sending that to Gemini causes it to hallucinate an unrelated article from training data
-            logger.warning(f"Could not scrape {target_url} — using original forwarded text instead")
-            text = original_text  # fallback to what the user actually sent
-
-    # --- ANTI-HALLUCINATION GUARD ---
-    # If the text is STILL just a URL (or very little text) because scraping failed,
-    # we MUST NOT send it to Gemini, otherwise it will invent a random story from its training data.
-    text_for_gemini_without_urls = re.sub(r'https?://[^\s]+', '', str(text)).strip()
-    if len(text_for_gemini_without_urls) < 30:
-        logger.warning("Aborting: Not enough real text to send to Gemini (preventing hallucination).")
-        await update.message.reply_text(
-            "❌ <b>Недостаточно текста для ИИ-анализа.</b>\n\n"
-            "Бот видит только голую ссылку, а прочитать этот сайт автоматически не удалось (возможно, он закрыт от ботов).\n\n"
-            "Из одной только ссылки нейросеть начинает <b>сочинять и выдумывать</b> несуществующие новости.\n\n"
-            "👉 Пожалуйста, <b>скопируйте текст новости руками</b> и отправьте его сюда вместе со ссылкой.",
-            parse_mode="HTML"
-        )
-        return
+            logger.warning(f"Could not scrape article text from {target_url}, using URL as context")
+            text = f"Статья по ссылке: {target_url}"
 
     logger.info("Calling process_and_translate...")
     translated = await process_and_translate(str(text))
@@ -1429,26 +1307,8 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         err_str = str(err_str).replace("<", "&lt;").replace(">", "&gt;")
         await update.message.reply_text(f"❌ Системная ошибка ИИ.\n\nТехническая деталь: <code>{err_str}</code>\n\n(Возможно, статья слишком короткая, либо это внутренняя ошибка Gemini API)", parse_mode="HTML")
         return
-
-    # Guard: don't continue if Gemini rejected OR if the actual visible text content is too thin.
-    # IMPORTANT: check _visible_len() not just bool(str) — '⚡ <b></b>\n\n' is truthy but empty!
-    ru_content = translated.get('ru', '')
-    uz_content = translated.get('uz', '')
-    ru_visible = _visible_len(ru_content)
-    uz_visible = _visible_len(uz_content)
-    logger.info(f"Visible text check: ru={ru_visible} chars, uz={uz_visible} chars, reject={translated.get('reject')}")
-
-    # In manual mode the ADMIN decides what's relevant.
-    # We only block if Gemini returned literally nothing (API error / empty response).
-    if ru_visible < 40 or uz_visible < 40:
-        logger.warning(f"manual_post_handler: Gemini returned empty content (ru_vis={ru_visible}, uz_vis={uz_visible}) — blocking.")
-        await update.message.reply_text(
-            "❌ ИИ не смог обработать эту новость — текст слишком короткий или нечитаемый.\n\n"
-            "Попробуйте переслать полную статью или добавить больше текста."
-        )
-        return
-
-
+        
+    # --- Advanced link extraction for manual posts ---
     link = ""
     # Support PTB 20+ forward_origin
     if getattr(update.message, 'forward_origin', None) and getattr(update.message.forward_origin, 'type', '') == 'channel':
@@ -1468,6 +1328,14 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not link and source_url_for_link:
         link = source_url_for_link
 
+    # Check text_link entities first (hidden hyperlinks)
+    entities = getattr(msg, 'entities', None) or getattr(msg, 'caption_entities', None) or []
+    if not link and entities:
+        for entity in entities:
+            if entity.type == 'text_link' and entity.url:
+                link = entity.url
+                break
+    
     # Try URL regex on text as fallback
     if not link:
         urls = re.findall(r'(https?://[^\s]+)', str(text))
@@ -1478,20 +1346,26 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         link = f"manual_{int(time.time())}"
 
     media_type = "photo"
-    photo_url = getattr(msg.photo[-1], 'file_id', None) if getattr(msg, 'photo', None) else None
+    photo_url = None
     
-    # Check if a video was sent, take its file_id directly
-    if not photo_url and getattr(msg, 'video', None):
+    if getattr(msg, 'document', None):
+        photo_url = msg.document.file_id
+        media_type = "document"
+    elif getattr(msg, 'audio', None):
+        photo_url = msg.audio.file_id
+        media_type = "audio"
+    elif getattr(msg, 'voice', None):
+        photo_url = msg.voice.file_id
+        media_type = "voice"
+    elif getattr(msg, 'video', None):
         photo_url = msg.video.file_id
         media_type = "video"
-        
-    # Check if image was sent as a document
-    if not photo_url and getattr(msg, 'document', None) and msg.document.mime_type:
-        if msg.document.mime_type.startswith('image/'):
-            photo_url = msg.document.file_id
-        elif msg.document.mime_type.startswith('video/'):
-            photo_url = msg.document.file_id
-            media_type = "video"
+    elif getattr(msg, 'animation', None):
+        photo_url = msg.animation.file_id
+        media_type = "animation"
+    elif getattr(msg, 'photo', None):
+        photo_url = msg.photo[-1].file_id
+        media_type = "photo"
 
     # If NO media in Telegram at all, try scraping the original source link
     if not photo_url and link.startswith("http"):
@@ -1502,8 +1376,9 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             photo_url = f"https://i.ytimg.com/vi/{yt_id}/maxresdefault.jpg"
             media_type = "photo" # Thumbnails act as a photo block
         else:
-            logger.info(f"No media found in TG message, attempting to scrape original source: {link}")
-            scraped_img = await extract_og_image(link)
+            target_photo_url = source_url_for_link if (source_url_for_link and 't.me' in link) else link
+            logger.info(f"No media found in TG message, attempting to scrape original source: {target_photo_url}")
+            scraped_img = await extract_og_image(target_photo_url)
             if scraped_img:
                 photo_url = scraped_img
         
@@ -1516,15 +1391,13 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ Ошибка при сохранении.")
         return
         
-    # Format: RU block → divider → UZ block → one source line → channel
-    ru_block = translated['ru']
-    uz_block = translated['uz']
-    source_line = f"\n\n🔗 Подробно / Batafsil: {link}" if not link.startswith("manual_") else ""
-    channel_line = "\n📢 @aileaderuz"
-    body = f"{ru_block}\n\n➖➖➖\n\n{uz_block}"
-    footer = source_line + channel_line
+    body = f"{translated['ru']}\n\n{translated['uz']}"
+    footer = ""
+    if not link.startswith("manual_"):
+        footer += f"\n\n🔗 Подробно / Batafsil: {link}"
+    footer += "\n📢 @aileaderuz"
     
-    caption_combined = safe_caption(body + footer)
+    caption_combined = body + footer
         
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Опубликовать", callback_data=f"pub|{article_id}")],
@@ -1577,41 +1450,45 @@ async def publish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Handle schema updates where media_type might be None for old articles
             link, text_uz, text_ru, photo_url, media_type = row
             media_type = media_type or "photo"
-
-            # --- Guard: don't publish articles with empty text ---
-            if not text_ru or not text_uz:
-                logger.error(f"Article {article_id} has empty text_ru or text_uz — aborting publish.")
-                await query.edit_message_caption(caption="❌ Статья пустая — нейросеть не смогла её обработать. Отмените и попробуйте снова.", reply_markup=None)
-                return
-
-            source_line = f"\n\n🔗 Подробно / Batafsil: {link}" if not link.startswith("manual_") else ""
-            channel_line = "\n📢 @aileaderuz"
-            body = f"{text_ru}\n\n➖➖➖\n\n{text_uz}"
-            footer = source_line + channel_line
-            caption_combined = safe_caption(body + footer)
-
-            # --- Photo: always go through resolve_photo for proper fallbacks ---
-            # Step 1: if it's a Telegram file_id (not a URL), download it via Bot API
-            final_photo = None
-            if photo_url and not photo_url.startswith("http"):
+            body = f"{text_ru}\n\n{text_uz}"
+            footer = ""
+            if not link.startswith("manual_"):
+                footer += f"\n\n🔗 Подробно / Batafsil: {link}"
+            footer += "\n📢 @aileaderuz"
+            
+            pass # no truncation
+            caption_combined = body + footer
+                
+            img_bytes = None
+            if photo_url and photo_url.startswith("http"):
                 try:
-                    tg_file = await context.bot.get_file(photo_url)
-                    final_photo = bytes(await tg_file.download_as_bytearray())
-                    logger.info(f"Downloaded Telegram file_id for publish ({len(final_photo)} bytes)")
+                    img_bytes = await download_image(photo_url)
                 except Exception as e:
-                    logger.warning(f"Telegram file_id download failed: {e} — will use resolve_photo fallback")
-
-            # Step 2: resolve_photo handles HTTP URLs, Pollinations AI, and DEFAULT_IMAGE
-            if not final_photo:
-                final_photo = await resolve_photo(photo_url, fallback_prompt="technology law digital news")
-
+                    logger.error(f"Image db download failed: {e}")
+            
             try:
+                final_photo = img_bytes if img_bytes else (photo_url if photo_url else None)
                 await send_article_media(context, channel_id, final_photo, media_type, caption_combined)
-                confirmation = safe_caption(f"✅ Опубликовано в канал!\n\n{caption_combined}", limit=900)
-                await query.edit_message_caption(caption=confirmation, reply_markup=None, parse_mode="HTML")
+                await query.edit_message_caption(caption=f"✅ Опубликовано в канал!\n\n{caption_combined}", reply_markup=None, parse_mode="HTML")
             except Exception as photo_err:
-                logger.error(f"publish_callback send failed: {photo_err}")
-                await query.edit_message_caption(caption=f"❌ Ошибка публикации: {photo_err}", reply_markup=None)
+                if "Message is not modified" in str(photo_err):
+                    return
+                if "Can't use file of type" in str(photo_err) and photo_url and not photo_url.startswith("http"):
+                    try:
+                        tg_file = await context.bot.get_file(photo_url)
+                        downloaded_bytes = bytes(await tg_file.download_as_bytearray())
+                        await send_article_media(context, channel_id, downloaded_bytes, media_type, caption_combined)
+                        await query.edit_message_caption(caption=f"✅ Опубликовано в канал! (через обход Telegram API)\n\n{caption_combined}", reply_markup=None, parse_mode="HTML")
+                        return
+                    except Exception as dl_err:
+                        logger.error(f"Fallback publish download failed: {dl_err}")
+                        if "Message is not modified" in str(dl_err):
+                            return
+                        
+                try:
+                    await query.edit_message_caption(caption=f"❌ Ошибка публикации: {photo_err}", reply_markup=None)
+                except Exception:
+                    pass
 
 async def fetch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually trigger the aggregator job (for testing and debugging)."""
@@ -1646,8 +1523,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"📢 Канал: <code>{channel_id or '❌ не задан'}</code>\n"
         f"📰 Новостей сегодня: <b>{today_count}</b>\n"
         f"📦 Всего в БД: <b>{total_count}</b>\n\n"
-        f"🟢 Режим: вручную (автопоиск отключён)\n"
-        f"ℹ️ Перешлите новость прямо в этот чат, бот обработает и готовит публикацию."
+        f"⏰ Автопоиск каждый час\n"
+        f"🔧 /fetch — запустить поиск сейчас"
     )
     await update.message.reply_text(status_text, parse_mode="HTML")
 
@@ -1664,10 +1541,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(publish_callback, pattern=r"^(pub|cancel|edit)\|.*"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
-    # AUTO-AGGREGATOR DISABLED — manual mode only.
-    # The admin sends news directly to the bot; no background fetching.
-    # To re-enable: uncomment the line below.
-    # job_queue.run_repeating(run_aggregator_job, interval=7200, first=60)
+    job_queue = app.job_queue
+    job_queue.run_repeating(run_aggregator_job, interval=3600, first=30)
 
     logger.info("Bot is running V7 (Hook style, /fetch, /status)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
