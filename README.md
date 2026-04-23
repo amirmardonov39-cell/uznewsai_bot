@@ -1258,7 +1258,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     logger.info("Replying with status message for News Post...")
-    await update.message.reply_text("⏳ Обрабатываю новую (ручную) новость...")
+    await update.message.reply_text("⏳ Обрабатываю новую новость (версия 3 с файлами)...")
 
     # --- Enrich text: for short messages that are just a URL, fetch full article content ---
     urls_in_text = re.findall(r'(https?://[^\s]+)', str(text))
@@ -1348,18 +1348,8 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     media_type = "photo"
     photo_url = None
     
-    if getattr(msg, 'photo', None):
-        photo_url = msg.photo[-1].file_id
-        media_type = "photo"
-    elif getattr(msg, 'video', None):
-        photo_url = msg.video.file_id
-        media_type = "video"
-    elif getattr(msg, 'animation', None):
-        photo_url = msg.animation.file_id
-        media_type = "animation"
-    elif getattr(msg, 'document', None):
+    if getattr(msg, 'document', None):
         photo_url = msg.document.file_id
-        # Let's not try to be smart with mime_type. If it's a document, it's a document.
         media_type = "document"
     elif getattr(msg, 'audio', None):
         photo_url = msg.audio.file_id
@@ -1367,6 +1357,15 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif getattr(msg, 'voice', None):
         photo_url = msg.voice.file_id
         media_type = "voice"
+    elif getattr(msg, 'video', None):
+        photo_url = msg.video.file_id
+        media_type = "video"
+    elif getattr(msg, 'animation', None):
+        photo_url = msg.animation.file_id
+        media_type = "animation"
+    elif getattr(msg, 'photo', None):
+        photo_url = msg.photo[-1].file_id
+        media_type = "photo"
 
     # If NO media in Telegram at all, try scraping the original source link
     if not photo_url and link.startswith("http"):
