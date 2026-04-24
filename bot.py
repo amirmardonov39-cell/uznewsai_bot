@@ -488,14 +488,14 @@ async def download_image(url: str, timeout: int = 20, min_size: int = 1000) -> b
         logger.error(f"Failed to download image {url}: {e}")
         return b""
 
-async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news digital") -> object:
+async def resolve_photo(photo_url: str) -> object:
     """
     Download and validate a photo for Telegram.
     Returns: bytes (valid image) | Telegram file_id str | None (no image — send text-only)
-    NEVER uses AI-generated images. NEVER returns a raw http URL.
+    NEVER uses AI-generated images. If source image fails — returns None.
     """
     if not photo_url:
-        photo_url = get_thematic_image(fallback_prompt)
+        return None  # No image — will post text-only
 
     if not photo_url.startswith("http"):
         return photo_url  # Telegram file_id — valid as-is
@@ -505,13 +505,7 @@ async def resolve_photo(photo_url: str, fallback_prompt: str = "technology news 
     if img_bytes:
         return img_bytes
 
-    logger.warning(f"Image download failed or rejected: {photo_url} — attempting fallback")
-    fallback_url = get_thematic_image(fallback_prompt)
-    if photo_url != fallback_url:
-        img_bytes_fallback = await download_image(fallback_url)
-        if img_bytes_fallback:
-            return img_bytes_fallback
-
+    logger.warning(f"Image download failed or rejected: {photo_url} — posting text-only")
     return None
 
 async def process_and_translate(text_content: str) -> dict:
@@ -925,15 +919,15 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
 
     logger.info("Running aggregator job...")
     
-    # Check daily limit (max 30 per day)
+    # Check daily limit (max 3 per day)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM articles WHERE date(timestamp) = date('now') AND text_ru IS NOT NULL AND text_ru != '' AND link NOT LIKE 'manual_%'")
     count_today = cursor.fetchone()[0]
     conn.close()
     
-    if count_today >= 30:
-        logger.info("Daily limit of 30 articles reached. Skipping fetch.")
+    if count_today >= 3:
+        logger.info("Daily limit of 3 articles reached. Skipping fetch.")
         return
 
     news_items = await asyncio.to_thread(fetch_latest_news)
@@ -1020,7 +1014,7 @@ async def run_aggregator_job(context: ContextTypes.DEFAULT_TYPE):
         ])
 
         media_type = "photo"  # aggregator always fetches photos, not videos
-        final_photo = await resolve_photo(photo_url, fallback_prompt=translated.get('image_prompt', 'technology news digital'))
+        final_photo = await resolve_photo(photo_url)
 
         try:
             await send_article_media(context, admin_id, final_photo, media_type, combined_caption, keyboard)
@@ -1382,9 +1376,8 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             if scraped_img:
                 photo_url = scraped_img
         
-    # Absolute fallback
-    if not photo_url:
-        photo_url = DEFAULT_IMAGE
+    # No image found — will post text-only (no AI fallback)
+    # photo_url stays None
 
     article_id = save_article(link, translated['uz'], translated['ru'], photo_url, media_type)
     if article_id == -1:
@@ -1406,7 +1399,7 @@ async def manual_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     ])
     
     try:
-        final_photo = await resolve_photo(photo_url, fallback_prompt=translated.get('image_prompt', 'technology news digital'))
+        final_photo = await resolve_photo(photo_url)
         await send_article_media(context, update.message.chat_id, final_photo, media_type, caption_combined, keyboard)
     except Exception as photo_err:
         logger.error(f"All photo fallbacks exhausted for manual post: {photo_err}")
@@ -1541,8 +1534,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(publish_callback, pattern=r"^(pub|cancel|edit)\|.*"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, manual_post_handler))
 
-    job_queue = app.job_queue
-    job_queue.run_repeating(run_aggregator_job, interval=3600, first=30)
+    # Auto-aggregator DISABLED — bot only processes manually forwarded news
+    # job_queue = app.job_queue
+    # job_queue.run_repeating(run_aggregator_job, interval=3600, first=30)
 
     logger.info("Bot is running V7 (Hook style, /fetch, /status)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
